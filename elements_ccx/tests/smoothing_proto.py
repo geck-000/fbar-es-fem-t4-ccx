@@ -3,9 +3,9 @@
 Written to settle, before any Fortran, whether a FACE-based smoothing fixes
 the instability that node-based smoothing (NS-FEM) has on the inclusion.
 
-The cell is the failure in miniature: a brine slab normal to x, embedded in
-ice, driven by a prescribed affine displacement u = eps.X on the whole
-boundary.  Two numbers come out.
+The cell is the failure in miniature: a soft slab normal to x, embedded in a
+stiff matrix, driven by a prescribed affine displacement u = eps.X on the
+whole boundary.  Two numbers come out.
 
   C1111   2U/(eps^2 V), the confined stiffness.  This is the locking-sensitive
           modulus -- it contains K directly.  Too high = locking.
@@ -13,7 +13,7 @@ boundary.  Two numbers come out.
           displacement.  This is the mode detector used on the real cells:
           an affine boundary condition admits NO fluctuation in the exact
           solution of a homogeneous body, and in a two-phase body only a
-          small one.  NS-FEM reads 19x on the campaign cell.
+          small one.  NS-FEM can read 19x on such cells.
 
 Schemes:
   c3d4     standard displacement tet
@@ -127,7 +127,7 @@ def mesh_box(n, slab_lo, slab_hi, jitter=0.0, seed=7, geom=None):
                 c = [nid(i + (v & 1), j + ((v >> 1) & 1), k + ((v >> 2) & 1))
                      for v in range(8)]
                 xc, yc, zc = (i + 0.5) / n, (j + 0.5) / n, (k + 0.5) / n
-                m = geom(xc, yc, zc, slab_lo, slab_hi)      # 1 = brine
+                m = geom(xc, yc, zc, slab_lo, slab_hi)      # 1 = soft phase
                 for s in split:
                     tets.append([c[s[0]], c[s[1]], c[s[2]], c[s[3]]])
                     mat.append(m)
@@ -135,12 +135,12 @@ def mesh_box(n, slab_lo, slab_hi, jitter=0.0, seed=7, geom=None):
 
 
 # --------------------------------------------------------------------------
-# GEOMETRY.  A brine slab spanning the cell is useless as a test: under a
+# GEOMETRY.  A soft slab spanning the cell is useless as a test: under a
 # periodic eps_xx it is a one-dimensional layered problem, the strain is
 # uniform inside each phase, so the nodal average of the divergence is EXACT
 # and every scheme returns bit-identical answers (measured: 5.9656e+09 for
-# c3d4, ns_vol and fs_ns alike).  The spurious mode needs brine nodes that
-# touch no ice element at all -- a three-dimensional pocket.
+# c3d4, ns_vol and fs_ns alike).  The spurious mode needs soft-phase nodes
+# that touch no stiff element at all -- a three-dimensional pocket.
 def _slab(x, y, z, lo, hi):
     return 1 if lo <= x < hi else 0
 
@@ -151,13 +151,13 @@ def _sphere(x, y, z, lo, hi):
 
 
 def _bridged(x, y, z, lo, hi):
-    """Brine slab pierced by a square lattice of ice bridges -- the BRKB
-    geometry in miniature, and the family where the mode was measured."""
+    """Soft slab pierced by a square lattice of stiff bridges, the geometry
+    where the mode was measured."""
     if not (lo <= x < hi):
         return 0
     b = 0.18                                 # bridge half-width
     if (abs(((y * 3) % 1.0) - .5) < b) and (abs(((z * 3) % 1.0) - .5) < b):
-        return 0                             # ice bridge
+        return 0                             # stiff bridge
     return 1
 
 
@@ -427,7 +427,7 @@ def assemble(scheme, nodes, tets, mat, g, vol, faces, patch, props,
     # stiffness, and only the deviatoric half is new.  The full
     # eq. (8) operator cannot be an element (173-node stencil at c=1, 494 at
     # c=2 against *USER ELEMENT's 255-node limit) and cannot be *EQUATION +
-    # SPRING1 either (tried in this campaign: overlapping patches gave a
+    # SPRING1 either (tried earlier: overlapping patches gave a
     # confined-compression reaction 1.55x the closed form).
     if scheme == 'esdev_nsvol':
         for m in sorted(set(int(x) for x in mat)):
@@ -490,7 +490,7 @@ def run(scheme, n, slab, props, eps=1e-3, stab=0.0, bubble=False,
     # PERIODIC boundary condition, u(x + L e_i) = u(x) + eps.(L e_i).
     #
     # This is what the real cells use, and it matters: with an affine
-    # Dirichlet condition on the whole boundary the brine slab is clamped on
+    # Dirichlet condition on the whole boundary the soft slab is clamped on
     # every side and the bellows mode simply cannot form -- every scheme then
     # reads a fluctuation of 0.2-0.4 and the test discriminates nothing.
     nn = len(nodes)
@@ -558,10 +558,11 @@ def run(scheme, n, slab, props, eps=1e-3, stab=0.0, bubble=False,
     #
     # p_e = K div(u)|_e is the element pressure the material actually feels,
     # whatever the scheme used to build the stiffness.  A stable element gives
-    # neighbouring brine elements nearly the same pressure, so the face jump
+    # neighbouring soft-phase elements nearly the same pressure, so the face
+    # jump
     # is O(h) against the mean.  A checkerboard gives jumps of order the mean
-    # or larger.  Reported as mean and max jump over brine-brine faces,
-    # normalised by the mean |p| in the brine.
+    # or larger.  Reported as mean and max jump over soft-soft faces,
+    # normalised by the mean |p| in the soft phase.
     soft = np.flatnonzero(mat == 1)
     theta = np.zeros(len(tets))
     for e in range(len(tets)):
@@ -613,17 +614,18 @@ def run(scheme, n, slab, props, eps=1e-3, stab=0.0, bubble=False,
     return c1111, fl, osc, oscmax, len(nodes), len(tets), oscs
 
 
-def runR(scheme, n, slab, Kb, Gb, ice, bubble=False, stab=0.0,
+def runR(scheme, n, slab, Kb, Gb, stiff, bubble=False, stab=0.0,
          jitter=0.0):
-    """R = C1111(undrained brine) / C1111(drained brine), the campaign's own
-    ratio, in miniature.  It needs no external reference: R -> 1 means the
-    scheme has lost the brine's bulk stiffness entirely, which is exactly the failure
-    mode seen on the real cells (R 6.29 -> 1.89)."""
-    und = {0: ice, 1: (Kb, Gb)}
-    drn = {0: ice, 1: (Kb / 1000.0, Gb)}
+    """R = C1111(undrained) / C1111(drained) of the soft phase, in miniature.
+
+    It needs no external reference: R -> 1 means the scheme has lost the soft
+    phase's bulk stiffness entirely, the failure mode seen on the real cells
+    (R 6.29 -> 1.89)."""
+    und = {0: stiff, 1: (Kb, Gb)}
+    drn = {0: stiff, 1: (Kb / 1000.0, Gb)}
     cu, fl, osc, oscm, _, _, oscs = run(scheme, n, slab, und, stab=stab,
                                         bubble=bubble, jitter=jitter)
-    # THE DENOMINATOR IS ALWAYS PLAIN C3D4, exactly as the campaign builds R:
+    # THE DENOMINATOR IS ALWAYS PLAIN C3D4, exactly as meshconv.py builds R:
     # Abaqus substitutes the hybrid element in the undrained cell only, so the
     # drained twin must stay the element both codes share.
     cd = run('c3d4', n, slab, drn, jitter=jitter)[0]
@@ -633,23 +635,24 @@ def runR(scheme, n, slab, Kb, Gb, ice, bubble=False, stab=0.0,
 def main():
     Gb = 4.4e5
     Ei, ni = 9.37e9, 0.33
-    ice = (Ei / (3 * (1 - 2 * ni)), Ei / (2 * (1 + ni)))
+    stiff = (Ei / (3 * (1 - 2 * ni)), Ei / (2 * (1 + ni)))
 
     n = int(sys.argv[1]) if len(sys.argv) > 1 else 8
     global JIT
     JIT = float(sys.argv[2]) if len(sys.argv) > 2 else 0.0
     lo, hi = 0.375, 0.625
-    print('ice K/G = %.2f   slab x in [%.3f,%.3f]   n = %d   jitter = %.2f'
-          % (ice[0] / ice[1], lo, hi, n, JIT))
+    print('stiff K/G = %.2f   slab x in [%.3f,%.3f]   n = %d   jitter = %.2f'
+          % (stiff[0] / stiff[1], lo, hi, n, JIT))
     print('periodic cell, macroscopic eps_xx applied')
 
-    exact = ice[0] + 4.0 * ice[1] / 3.0
-    print('\n-- patch test, ice only (exact C1111 = %.6e) --' % exact)
+    exact = stiff[0] + 4.0 * stiff[1] / 3.0
+    print('\n-- patch test, stiff phase only (exact C1111 = %.6e) --'
+          % exact)
     for sc in ['c3d4', 'ns_vol', 'ns_full', 'fs_full', 'fs_ns', 'fs_vol']:
         for bub in (False, True):
             if bub and sc not in ('fs_full', 'fs_ns'):
                 continue
-            c, fl, _o, _om, _, _, _ = run(sc, 4, (2.0, 3.0), {0: ice, 1: ice},
+            c, fl, _o, _om, _, _, _ = run(sc, 4, (2.0, 3.0), {0: stiff, 1: stiff},
                                        bubble=bub)
             print('   %-9s%-8s C1111=%.6e  rel err=%9.2e'
                   % (sc, ' +bubble' if bub else '', c, abs(c / exact - 1)))
@@ -657,7 +660,8 @@ def main():
     arms = [('c3d4', False), ('ns_vol', False), ('fs_full', False),
             ('fs_ns', False), ('fs_full', True), ('fs_ns', True)]
     print('\n-- R = C1111(undrained)/C1111(drained) vs bulk-to-shear ratio --')
-    print('   the paper validates bFS-FEM at K/G = 25..100; brine is 5000')
+    print('   the reference paper validates bFS-FEM at K/G = 25..100; the '
+          'soft phase here is 5000')
     hdr = '   %-16s' % 'K/G' + ''.join('%11s' % ('%.0f' % r)
                                        for r in (50, 100, 500, 1000, 5000))
     print(hdr)
@@ -665,7 +669,7 @@ def main():
         tag = sc + (' +bub' if bub else '')
         row, extra = '   %-16s' % tag, []
         for ratio in (50, 100, 500, 1000, 5000):
-            R, fl, osc, oscm = runR(sc, n, (lo, hi), ratio * Gb, Gb, ice,
+            R, fl, osc, oscm = runR(sc, n, (lo, hi), ratio * Gb, Gb, stiff,
                                     bubble=bub, jitter=JIT)
             row += '%11.4f' % R
             extra.append((fl, osc))

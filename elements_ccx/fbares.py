@@ -31,11 +31,12 @@ SUPPORT: the (support - ring) x (support - ring) block is identically zero.
 That block is most of the element, and mastruct.c was allocating structure for
 all of it.  The connectivity is therefore written RING FIRST, the ring size is
 carried in the type label, and mastruct.c / mafillsmas.f skip the outer block.
-Measured at c = 1: insertions fall 3.3x and LMESH_m0p0120 becomes buildable.
+Measured at c = 1: insertions fall 3.3x and a finer production mesh
+becomes buildable.
 Nothing about the assembled matrix changes -- the entries dropped are zero.
 
-STENCIL WIDTH IS THE BINDING CONSTRAINT.  Measured on LMESH_m0p0240's soft
-phase (117437 tets, 36323 nodes, 184572 edges):
+STENCIL WIDTH IS THE BINDING CONSTRAINT.  Measured on the soft phase of a
+production mesh (117437 tets, 36323 nodes, 184572 edges):
 
     U2 deviatoric      mean  6.3 nodes/edge   max  14   ->   42 DOF
     U3 volumetric c=1  mean 33.7              max 173   ->  519 DOF
@@ -102,7 +103,7 @@ def final_structure(u2, u3, tcn, symmetric=False):
 
     This counts the element patterns only.  ccx additionally expands DOFs that
     carry an SPC or MPC, and drops the constrained ones, which moves entries
-    around.  Measured on the LCOL4 0.0240 undrained deck this lands 2% high --
+    around.  Measured on an undrained production deck this lands 2% high --
     1.67e7 here against the 16 378 633 ccx goes on to report -- so treat it as
     a tight upper estimate rather than the exact final nnz.
     """
@@ -266,7 +267,7 @@ def stencils(conn, ncyc, chunk=20000):
     #
     # Vectorised: a dict keyed by (int, int) tuples costs a few hundred bytes
     # per edge and a Python loop over 6*ne of them, which at 0.0060 is ~4M
-    # edges and ~1 GB of dict before anything else is allocated.  Packing each
+    # edges and ~1 GB of dict before anything else is allocated.  Combining each
     # sorted pair into one int64 and calling np.unique gives the same edge
     # list in the same order -- lexicographic by (lo, hi), since hi < nn.
     ii = np.array([0, 0, 0, 1, 1, 2])
@@ -435,8 +436,8 @@ def main():
     # mastruct (CCX_MASTRUCT_DEDUP=chunk) streams the transient away and never
     # materialises it, so gating on it rejected decks that build perfectly.
     #
-    # Concretely it rejected the 2.5-element undrained cells of the sea-ice
-    # campaign at 5.20e9 transient pairs against a 2.15e9 limit, when their
+    # Concretely it rejected 2.5-element undrained cells at 5.20e9
+    # transient pairs against a 2.15e9 limit, when their
     # deduplicated structure fits comfortably. Keeping a flag whose default
     # answer was wrong for the supported build is worse than having no flag.
     nnz = final_structure(u2, u3, tcn, a.symmetric)

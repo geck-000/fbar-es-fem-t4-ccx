@@ -148,10 +148,10 @@ def two_phase_blocks(
     faces, patch = proto.topology(tets, mat)
     fixed = np.repeat(vc.boundary_mask(nodes), 3)
     free = ~fixed
-    ice = (9.37e9 / (3.0 * (1.0 - 2.0 * 0.33)),
-           9.37e9 / (2.0 * (1.0 + 0.33)))
+    stiff = (9.37e9 / (3.0 * (1.0 - 2.0 * 0.33)),
+             9.37e9 / (2.0 * (1.0 + 0.33)))
     K_base = proto.assemble('fbar_%d' % cycles, nodes, tets, mat, g, vol,
-                            faces, patch, {0: ice, 1: (0.0, G)})[free][:, free]
+                            faces, patch, {0: stiff, 1: (0.0, G)})[free][:, free]
     K_vol = proto.assemble('fbar_%d' % cycles, nodes, tets, mat, g, vol,
                            faces, patch,
                            {0: (0.0, 0.0), 1: (G, 0.0)})[free][:, free]
@@ -175,9 +175,9 @@ def pairing_metrics(
             which carries the inclusion arm as the production
             configuration.
     """
-    ice = (9.37e9 / (3.0 * (1.0 - 2.0 * 0.33)),
-           9.37e9 / (2.0 * (1.0 + 0.33)))
-    props = {0: ice, 1: (kg * G, G)}
+    stiff = (9.37e9 / (3.0 * (1.0 - 2.0 * 0.33)),
+             9.37e9 / (2.0 * (1.0 + 0.33)))
+    props = {0: stiff, 1: (kg * G, G)}
     print('two-phase %s cell at K/G = %g (periodic, n = %d)'
           % (cell, kg, n))
     print('  %-10s %12s %12s %12s' %
@@ -273,8 +273,8 @@ def main() -> int:
               % (kg, neg, ratio))
 
     print('\ntwo-phase sphere cell, fluctuation at K/G = 5000')
-    ice = (9.37e9 / (3 * (1 - 2 * 0.33)), 9.37e9 / (2 * (1 + 0.33)))
-    props = {0: ice, 1: (5000.0 * G, G)}
+    stiff = (9.37e9 / (3 * (1 - 2 * 0.33)), 9.37e9 / (2 * (1 + 0.33)))
+    props = {0: stiff, 1: (5000.0 * G, G)}
     for sym in (False, True):
         if sym:
             os.environ['FBAR_SYM'] = '1'

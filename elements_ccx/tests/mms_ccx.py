@@ -3,7 +3,7 @@
 
 Generates the divergence-free manufactured problem of
 `verify_convergence.py` as a CalculiX deck, optionally converts the F-bar
-element set with `fbares.py`, runs `ccx_fbar`, parses the nodal
+element set with `fbares.py`, runs CalculiX, parses the nodal
 displacements from the .dat and measures the same relative L2 and H1
 errors as the prototype.  The two levels therefore quote the same norms.
 
@@ -415,7 +415,7 @@ def main() -> int:
     ap.add_argument('--mesh', choices=['box', 'delaunay'], default='box')
     ap.add_argument('--symmetric', action='store_true',
                     help='Galerkin pairing via CCX_FBAR_SYM=1')
-    ap.add_argument('--ccx', default=os.environ.get('CCX_MMS', 'ccx_fbar'))
+    ap.add_argument('--ccx', default=os.environ.get('CCX', 'ccx'))
     a = ap.parse_args()
 
     if a.sweep:

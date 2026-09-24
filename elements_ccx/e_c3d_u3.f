@@ -31,7 +31,7 @@
 !     u3vol does -- u3vol stops with a message naming the element if it finds
 !     a node the connectivity does not carry.
 !
-!     CAPACITY.  Measured on LMESH_m0p0240 (soft phase, 184572 edges):
+!     CAPACITY.  Measured on a production mesh (soft phase, 184572 edges):
 !         c = 1   mean 33.7 nodes  p99  78  max 173  ( 519 DOF)
 !         c = 2   mean 93.6 nodes  p99 259  max 494  (1482 DOF)
 !     c = 1 fits: patch 0008 already carries the element matrix at 765 DOF,
@@ -88,7 +88,7 @@
         write(*,*) '       spans ',nope,' nodes (',3*nope,' DOF).'
         write(*,*) '       The limit is 255 nodes (765 DOF) -- the most'
         write(*,*) '       that lakon(8:8) can encode.  The c=1 stencil'
-        write(*,*) '       reaches 173 nodes on LMESH_m0p0240 and fits;'
+        write(*,*) '       reaches 173 nodes and fits;'
         write(*,*) '       c=2 reaches 494 and cannot be an element.'
         call exit(201)
       endif

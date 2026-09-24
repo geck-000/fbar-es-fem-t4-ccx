@@ -3,7 +3,7 @@
 
     python3 run_tests.py                  # element checks
     python3 run_tests.py --quick          # operators, walk and deck only
-    python3 run_tests.py --ccx ccx_fbar   # adds the CalculiX-side checks
+    python3 run_tests.py --ccx /path/to/ccx   # adds the CalculiX checks
 
 `verify_element.py` carries the checks that need no CalculiX binary.
 `verify_nltan.py` compiles the Fortran tangent driver with gfortran and runs

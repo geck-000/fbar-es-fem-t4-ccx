@@ -22,7 +22,8 @@
 !
 !     konl(1) and konl(2) ARE THE TWO EDGE NODES.  The rest is the other nodes
 !     of the tets sharing that edge; u2edge finds the tets themselves.  On the
-!     campaign's LMESH_m0p0240 cell this ring is 6.3 nodes on average and 14 at
+!     soft phase of a production mesh this ring is 6.3 nodes on average and
+!     14 at
 !     worst, so unlike U3 it sits far inside the element-matrix capacity.
 !
 !     Keep U2 out of any *EL PRINT set: it has no material volume of its own,

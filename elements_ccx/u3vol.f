@@ -30,7 +30,7 @@
 !     typeset equations, not a text extraction; pdftotext drops every tilde and
 !     bar in this paper and the diacritics carry the meaning.
 !
-!     STENCIL WIDTH.  Measured on the campaign's LMESH_m0p0240 soft phase
+!     STENCIL WIDTH.  Measured on the soft phase of a production mesh
 !     (117437 tets, 36323 nodes, 184572 edges):
 !
 !         c = 1   mean  33.7 nodes/edge   p99  78   max 173  ( 519 DOF)
@@ -121,7 +121,8 @@
         nstart(1)=0
 !
 !       element volumes.  V_n of eq. (6) is NOT cached: it is per material,
-!       and a node on the brine/ice interface has a different V_n in each
+!       and a node on the inclusion/matrix interface has a different V_n
+!       in each
 !       phase.  Caching the plain sum over all elements at the node and then
 !       skipping foreign ones in the walk would divide by an inflated V_n,
 !       break the unit row sum of Q, and stop the chain preserving a constant

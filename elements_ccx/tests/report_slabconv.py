@@ -2,9 +2,8 @@
 
     report_slabconv.py <root> <K/G> <load axis> <n>...
 
-Split out of the shell driver for the same reason report_abaqus_ratio.py was:
-a sweep that takes an hour must not have to be repeated to re-read it, and
-editing the reporting must not be able to disturb a running solve.
+Split out of the sweep driver so a finished sweep can be re-read without
+re-solving, and editing the reporting cannot disturb a running solve.
 """
 import os
 import re

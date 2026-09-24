@@ -1,7 +1,7 @@
 Ring x support: stop allocating the half of U3 that is identically zero.
 
 Patch 0010 reported that F-barES-FEM-T4 at c = 1 could not be built on the
-LMESH_m0p0120 cell: mastruct.c pushes one entry per off-diagonal upper-
+0.0120 mesh: mastruct.c pushes one entry per off-diagonal upper-
 triangle (dof,dof) pair of every element onto mast1 with NO deduplication,
 the index is a 32-bit ITG, and a U3 element dense over its 39-node stencil
 needed 5.16e9 insertions -- past 2^31, so ccx died in u_realloc with a
@@ -48,28 +48,28 @@ and mastruct and the element agree on the same wrong answer: no error, just
 a different element.
 
 e_c3d_u3 therefore checks that tbar vanishes past nring and stops with the
-element number, its nring, and the offending node.  Verified: the old
-ptf1.inp through the new binary stops with
+element number, its nring, and the offending node.  Verified: an old deck
+through the new binary stops with
 
   *ERROR in e_c3d_u3: element 3151
          lakon(3:3) says the ring is the first 1 nodes, but tbar is
          nonzero at position 2 node 7
 
-tests/verify_fbares_deck.py checks the same thing in the deck, where the
+tests/verify_element.py checks the same thing in the deck, where the
 element can be named before a two-hour solve rather than after one.
 
 WHAT IT BUYS
 
 Insertions fall by a factor ~3.3 at c = 1:
 
-  cell            c   before     after     outcome
-  LMESH_m0p0240   0   7.23e7     2.7e7     -
-  LMESH_m0p0240   1   1.12e9     3.4e8     30.05M -> ~ nnz falls with it
-  LMESH_m0p0120   1   5.16e9     1.5e9     BUILDS: 600662 eq, 68.6M nnz
+  mesh       c   before     after     outcome
+  0.0240     0   7.23e7     2.7e7     -
+  0.0240     1   1.12e9     3.4e8     30.05M -> ~ nnz falls with it
+  0.0120     1   5.16e9     1.5e9     BUILDS: 600662 eq, 68.6M nnz
 
 VERIFICATION -- NOTHING MOVED
 
-  * LMESH_m0p0240 c=1, the production cell: E_x = 6153500000.0, BIT-IDENTICAL
+  * the 0.0240 mesh at c = 1: E_x = 6153500000.0, BIT-IDENTICAL
     to the dense-structure run of patch 0003.  R is still 2.4448.
   * patch test, general six-component strain on a distorted mesh, c = 0, 1, 2:
     max|u - eps.X|/max|u| = 3.165e-07 for every arm, the same value the C3D4
@@ -81,13 +81,12 @@ the ring ordering or the nring decode was wrong.  None moved.
 
 WHAT IT DOES NOT FIX
 
-LMESH_m0p0120 at c = 1 now builds its structure and dies in the FACTORISATION
+The 0.0120 mesh at c = 1 now builds its structure and dies in the FACTORISATION
 instead: 600662 equations at 68.6M nonzeros through the unsymmetric PARDISO
 path asks for 45 GB of virtual memory and was OOM-killed twice at ~22-24 GB
 anon-rss on this 30 GB machine.  That is a different wall and this patch does
-not claim it.  Note the two kills were GLOBAL, not cgroup -- neither run was
-under ccx_capped, which is what that wrapper exists to prevent; and swap here
-is zram (RAM-backed) so it cannot help, while /tmp is tmpfs so a 263 MB deck
+not claim it.  Note the two kills were GLOBAL, not cgroup, and swap here is
+zram (RAM-backed), so it cannot help, while /tmp is tmpfs so a 263 MB deck
 staged there is itself RAM.
 
 --- mafillsmas.f

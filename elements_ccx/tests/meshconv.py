@@ -8,12 +8,12 @@ undrained), and reports R = C1111(und)/C1111(drn) with report_slabconv.py.
 The drained denominator is always plain C3D4, so the arms differ only in the
 element under test.
 
-    python3 meshconv.py --ccx /path/to/ccx_fbar
-    python3 meshconv.py --ccx /path/to/ccx_fbar --ns 10 20 30 40 --kg 500
+    python3 meshconv.py --ccx /path/to/ccx
+    python3 meshconv.py --ccx /path/to/ccx --ns 10 20 30 40 --kg 500
     python3 meshconv.py --dry-run
 
 The same cell is rebuilt at every n.  The drained twin is the same mesh with
-one elastic card rewritten, so R carries no packing noise: the only thing
+one elastic card rewritten, so R carries no sampling noise: the only thing
 that changes between points is h.
 """
 from __future__ import annotations
@@ -66,7 +66,7 @@ def main() -> int:
         Process exit status.
     """
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument('--ccx', default=os.environ.get('CCX_FBAR', 'ccx_fbar'),
+    ap.add_argument('--ccx', default=os.environ.get('CCX', 'ccx'),
                     help='patched CalculiX binary')
     ap.add_argument('--ns', type=int, nargs='+', default=[10, 20, 30, 40])
     ap.add_argument('--kg', type=float, default=500.0)

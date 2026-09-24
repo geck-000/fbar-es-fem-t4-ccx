@@ -43,7 +43,7 @@ import smoothing_proto as P  # noqa: E402
 import smoothing_proto as S  # noqa: E402
 
 EI, NI = 9.37e9, 0.33
-ICE = (EI / (3.0 * (1.0 - 2.0 * NI)), EI / (2.0 * (1.0 + NI)))
+STIFF = (EI / (3.0 * (1.0 - 2.0 * NI)), EI / (2.0 * (1.0 + NI)))
 GB = 4.4e5
 FAILS: List[str] = []
 
@@ -99,11 +99,11 @@ def check_operators() -> None:
                 np.abs(S @ one - 1).max(), 0.0, 1e-11)
 
     print('\nV2  patch test, homogeneous block, exact C1111 = K + 4G/3')
-    exact = ICE[0] + 4.0 * ICE[1] / 3.0
+    exact = STIFF[0] + 4.0 * STIFF[1] / 3.0
     for jin in ('elem', 'edge'):
         os.environ['FBAR_JIN'] = jin
         for c in (0, 1, 2, 3):
-            r = P.run('fbar_%d' % c, 4, (2.0, 3.0), {0: ICE, 1: ICE},
+            r = P.run('fbar_%d' % c, 4, (2.0, 3.0), {0: STIFF, 1: STIFF},
                       jitter=0.0)
             chk('%s fbar_%d  rel err in C1111' % (jin, c),
                 abs(r[0] / exact - 1), 0.0, 1e-10)
@@ -122,7 +122,7 @@ def check_operators() -> None:
         nnode = len({int(a) for e in sel for a in tets[e]})
         rE = np.linalg.matrix_rank(E.toarray())
         rS = np.linalg.matrix_rank(S.toarray())
-        print('   c=%d  brine: %d elems, %d nodes, %d edges | rank E = %d, '
+        print('   c=%d  soft phase: %d elems, %d nodes, %d edges | rank E = %d, '
               'rank S = %d  (c >= 1 caps the trial space at the incidence rank)'
               % (c, len(sel), nnode, len(ek), rE, rS))
 
@@ -220,7 +220,7 @@ def check_force() -> None:
     print('\nN1  f(0) = 0')
     nodes, tets, mat = P.mesh_box(6, 0.375, 0.625, 0.3, geom=P.GEOM['sphere'])
     g, vol = P.grads(nodes, tets)
-    props = {0: ICE, 1: (500.0 * GB, GB)}
+    props = {0: STIFF, 1: (500.0 * GB, GB)}
     for c in (0, 1, 2, 3):
         nl = P.FbarNL(nodes, tets, mat, g, vol, props, c)
         f = nl.force(np.zeros(3 * len(nodes)))
@@ -239,7 +239,7 @@ def check_force() -> None:
     # ONE material.  The smoothing is not allowed to cross a material
     # interface, so a patch test needs a single-material mesh; the periodic
     # statement (N3b) uses a badly distorted cell instead.
-    hom = {0: ICE}
+    hom = {0: STIFF}
     print('  N3a  unjittered box, free surfaces, analytic Hencky resultant')
     n0, t0, m0 = P.mesh_box(6, 0.375, 0.625, 0.0, geom=P.GEOM['sphere'])
     g0, v0 = P.grads(n0, t0)
@@ -259,7 +259,7 @@ def check_force() -> None:
                 np.abs(f.reshape(-1, 3)[int0]).max() / scale, 0.0, 1e-9)
             # F = diag(lam,1,1), so T_xx = (K + 4G/3) ln(lam) and the x = 1
             # face keeps unit current area: its resultant is T_xx itself.
-            Txx = (ICE[0] + 4.0 * ICE[1] / 3.0) * np.log(lam)
+            Txx = (STIFF[0] + 4.0 * STIFF[1] / 3.0) * np.log(lam)
             fx = f.reshape(-1, 3)[face0, 0].sum()
             chk('c=%d lam=%.3f  face resultant vs analytic Hencky' % (c, lam),
                 abs(fx / Txx - 1.0), 0.0, 1e-9)
@@ -267,10 +267,10 @@ def check_force() -> None:
     print('  N3b  jittered periodic cell: affine field is an exact solution')
     for c in (0, 1, 2, 3):
         cn, fln, it, rn = P.run_nl('fbar_%d' % c, 6, (0.375, 0.625),
-                                   {0: ICE, 1: ICE}, eps=1e-3, jitter=0.3,
+                                   {0: STIFF, 1: STIFF}, eps=1e-3, jitter=0.3,
                                    geomname='sphere')
         chk('c=%d  fluctuation of the homogeneous cell' % c, fln, 0.0, 1e-7)
-        exact = ICE[0] + 4.0 * ICE[1] / 3.0
+        exact = STIFF[0] + 4.0 * STIFF[1] / 3.0
         chk('c=%d  C1111 vs K + 4G/3 (Hencky, eps=1e-3)' % c,
             abs(cn / exact - 1.0), 0.0, 2e-3)
 
@@ -379,8 +379,8 @@ def check_tangent() -> None:
     g4, v4 = P.grads(n4, t4)
     fc4, pt4 = P.topology(t4, m4)
     nd = 3 * len(n4)
-    props = {0: ICE, 1: (500.0 * GB, GB)}
-    props100 = {0: ICE, 1: (100.0 * GB, GB)}
+    props = {0: STIFF, 1: (500.0 * GB, GB)}
+    props100 = {0: STIFF, 1: (100.0 * GB, GB)}
 
     print('\nT1  tangent(0) is the small-strain operator, to round-off')
     for c in (0, 1, 2, 3):
@@ -400,7 +400,7 @@ def check_tangent() -> None:
     for tag, u in (('stretch 20%', 0.4 * stretch), ('stretch 50%', stretch),
                    ('two-phase shear', shear)):
         for kg in (0.0, 100.0, 5000.0):
-            pr = {0: ICE, 1: (kg * GB, GB)}
+            pr = {0: STIFF, 1: (kg * GB, GB)}
             nl = P.FbarNL(n4, t4, m4, g4, v4, pr, 1)
             Kt = nl.tangent(u)
             Jnum = fd_tangent(nl, u)
@@ -431,7 +431,7 @@ def check_tangent() -> None:
             % (label.strip(), eps), min(nquad, 2), 2.0, 0.0)
     print('   K/G uniformity of the tangent (stretch eps=0.2)')
     for kg in (0.0, 10.0, 100.0):
-        pr = {0: ICE, 1: (kg * GB, GB)}
+        pr = {0: STIFF, 1: (kg * GB, GB)}
         hist = []
         cn, fl, it, rn = P.run_nl('fbar_1', 4, (0.375, 0.625), pr, eps=0.2,
                                   jitter=0.3, geomname='sphere',
@@ -448,7 +448,7 @@ def check_tangent() -> None:
 
 def census(scheme: str, n: int, K: float, G: float, jitter: float = 0.3,
            stab: float = 0.0, bubble: bool = False, nev: int = 30,
-           two_phase: bool = False, ice: Optional[Tuple[float, float]] = None,
+           two_phase: bool = False, stiff: Optional[Tuple[float, float]] = None,
            radius: float = 0.30) -> Optional[List[Tuple[float, float]]]:
     """Lowest modes of a clamped two-phase cube and their volumetric content.
 
@@ -465,8 +465,8 @@ def census(scheme: str, n: int, K: float, G: float, jitter: float = 0.3,
         stab: Stabilisation parameter.
         bubble: Use the subcell bubble gradients.
         nev: Number of eigenpairs.
-        two_phase: Embed a brine sphere in ice.
-        ice: Properties of the soft phase.
+        two_phase: Embed a soft sphere in the stiff matrix.
+        stiff: Properties of the stiff phase.
         radius: Sphere radius.
 
     Returns:
@@ -482,7 +482,7 @@ def census(scheme: str, n: int, K: float, G: float, jitter: float = 0.3,
     g, vol = S.grads(nodes, tets)
     faces, patch = S.topology(tets, mat)
     sbg = S.subcell_bubble_grads(nodes, tets, g) if bubble else None
-    props = {0: (ice if two_phase else (K, G)), 1: (K, G)}
+    props = {0: (stiff if two_phase else (K, G)), 1: (K, G)}
     Kg = S.assemble(scheme, nodes, tets, mat, g, vol, faces, patch,
                     props, stab, bubble, sbg)
 
@@ -526,12 +526,12 @@ def check_stability(n: int = 10) -> None:
         n: Cells per edge of the clamped cube.
     """
     G = 4.4e5
-    ice = (9.37e9 / (3 * (1 - 2 * 0.33)), 9.37e9 / (2 * 1.33))
+    stiff = (9.37e9 / (3 * (1 - 2 * 0.33)), 9.37e9 / (2 * 1.33))
     arms = [('c3d4', 0.0, False, 'c3d4'),
             ('ns_vol', 0.0, False, 'ns_vol (NS-FEM) s=0'),
             ('ns_vol', 0.07, False, 'ns_vol s=0.07'),
             ('fs_ns', 0.0, False, 'fs_ns (FS/NS-FEM)')]
-    print('\nS   two-phase clamped cube: brine sphere r=0.30 in ice, n=%d, '
+    print('\nS   two-phase clamped cube: soft sphere r=0.30 in the stiff matrix, n=%d, '
           'jitter 0.3' % n)
     print('    r is measured over the SOFT PHASE only.\n')
     for ratio in (50, 500, 5000):
@@ -541,7 +541,7 @@ def check_stability(n: int = 10) -> None:
               % ('scheme', 'lambda_1/G', 'r_1', 'n_bad', 'max r'))
         for sc, stab, bub, tag in arms:
             c = census(sc, n, ratio * G, G, stab=stab, bubble=bub,
-                       two_phase=True, ice=ice)
+                       two_phase=True, stiff=stiff)
             if c is None:
                 continue
             lam1, r1 = c[0]

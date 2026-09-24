@@ -6,7 +6,7 @@ mastruct.c builds the sparse structure by pushing ONE linked-list entry per
 duplicate entries" passes.  So the transient list is the SUM of the
 per-element patterns while the structure that survives is their UNION.
 
-For F-barES-FEM-T4 those differ by ~24x.  Measured on the LCOL4 sea ice cell,
+For F-barES-FEM-T4 those differ by ~24x.  Measured on a production cell,
 undrained, c = 1:
 
   L_mesh    pairs offered   distinct (final nnz)   ratio
@@ -62,7 +62,7 @@ variable is the escape hatch for bisecting a suspected regression; there is no
 other setting.
 
 VERIFIED ANSWER-NEUTRAL.  Identical structure and identical reactions against
-the legacy path, on the acceptance decks (LCOL4, undrained, c = 1, unsymmetric
+the legacy path, on the acceptance decks (production mesh, undrained, c = 1, unsymmetric
 path, PARDISO out of core):
 
   L_mesh   path      equations   nonzero lower triangular   F_x on RP-1
@@ -358,7 +358,7 @@ builds: 187 006 594 nonzeros at 0.0080, 4.06e8 at 0.0060.
 +    per-element patterns, while the structure that survives is their UNION.
 +
 +    For the F-bar ES-FEM U3 volumetric elements those differ by ~24x --
-+    measured on the LCOL4 cell: 1.66e9 offered against 68 318 770 distinct at
++    measured on the production cell: 1.66e9 offered against 68 318 770 distinct at
 +    L_mesh 0.0120, and 9.47e9 against 4.06e8 at 0.0060 -- because the same
 +    pair is produced by ~24 different edges.  The duplication is ACROSS
 +    elements: within one element the jj/ll loop already emits each pair

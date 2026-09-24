@@ -275,7 +275,7 @@ def main() -> int:
         Process exit status.
     """
     ap = argparse.ArgumentParser()
-    ap.add_argument('--ccx', default=os.environ.get('CCX_MMS', 'ccx_fbar'))
+    ap.add_argument('--ccx', default=os.environ.get('CCX', 'ccx'))
     ap.add_argument('--out', default='out_nlccx')
     ap.add_argument('--n', type=int, default=4)
     ap.add_argument('--uniaxial', action='store_true',

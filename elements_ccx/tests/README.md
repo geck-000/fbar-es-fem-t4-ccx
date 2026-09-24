@@ -5,8 +5,8 @@ Two commands cover the suite:
 ```bash
 python3 run_tests.py                  # element checks, no ccx needed
 python3 run_tests.py --quick          # operators, walk and deck only
-python3 run_tests.py --ccx /path/to/ccx_fbar
-python3 meshconv.py --ccx /path/to/ccx_fbar --ns 10 20 30 40 --kg 500
+python3 run_tests.py --ccx /path/to/ccx
+python3 meshconv.py --ccx /path/to/ccx --ns 10 20 30 40 --kg 500
 ```
 
 | File | Role |

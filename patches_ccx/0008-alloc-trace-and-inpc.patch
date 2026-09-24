@@ -4,7 +4,7 @@ TWO THINGS, FOUND THE SAME WAY.  A deck that dies in the kernel OOM killer
 never reaches u_calloc's own error path, so ccx tells you nothing about what
 it was trying to allocate.  CCX_ALLOC_TRACE=<MB> logs every allocation at or
 above that size -- variable, size, and the source line that asked for it --
-BEFORE it is attempted.  On the LCOL4 0.0060 undrained cell that turned a
+BEFORE it is attempted.  On the 0.0060 undrained mesh that turned a
 silent kill into a list, and the list had an obvious entry in it.
 
   u_calloc.c    CCX_ALLOC_TRACE=<MB>, on the way in
@@ -65,7 +65,7 @@ elements are U2/U3 smoothing domains that carry no stress at all -- that is
 +     Every access goes through the ipoinpc offset table -- getnewline.f walks
 +     ipoinpc(iline-1)+1 .. ipoinpc(iline) and nothing strides inpc at a fixed
 +     132 -- so ipoinpc[*nline] is exactly the number of characters stored.
-+     Padding every line to the maximum costs, on the LCOL4 0.0060 deck,
++     Padding every line to the maximum costs, on the 0.0060 deck,
 +     3.110 GB against ~1.7 GB of content, and inpc lives until the very end
 +     of the run (it is freed with ipoinp/inp only after the last step), so
 +     that slack is held straight through the factorisation. */
