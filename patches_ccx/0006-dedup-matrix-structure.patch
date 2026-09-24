@@ -1,0 +1,601 @@
+Deduplicate the matrix structure as it is built, instead of accumulating it.
+
+mastruct.c builds the sparse structure by pushing ONE linked-list entry per
+(dof,dof) pair of every element onto mast1/next -- growing them 1.1x through a
+32-bit ITG index -- and compressing only afterwards, in the sort + "removing
+duplicate entries" passes.  So the transient list is the SUM of the
+per-element patterns while the structure that survives is their UNION.
+
+For F-barES-FEM-T4 those differ by ~24x.  Measured on the LCOL4 sea ice cell,
+undrained, c = 1:
+
+  L_mesh    pairs offered   distinct (final nnz)   ratio
+  0.0240      4.02e8              16 378 633       24.6x
+  0.0120      1.66e9              68 318 770       24.3x
+  0.0060      9.47e9             ~4.06e8           23.3x
+
+The same (dof,dof) pair is produced by ~24 different edges, because a U3
+element's ring x support stencil overlaps its neighbours' heavily.  The
+duplication is entirely ACROSS elements: within one element the jj/ll loop
+already emits each pair exactly once, so a per-element "direct assembly" of
+U3's known ring x support pattern cannot remove any of it.  (Counted on the
+0.0120 deck: the loop makes 1.4394e9 U3 insertions, while sum(3*nring * 3*nope)
+-- the size a direct builder would preallocate -- is 1.5626e9, LARGER.)
+
+What the transient costs is what blocks the finer meshes.  At 0.0120 it is
+11.7 GB and the run peaks at 22.3 GB; at 0.0080 it is 4.5e9 entries and at
+0.0060 9.5e9, both past the 2^31 = 2.147e9 an ITG can index, so ccx dies in
+u_realloc with a negative allocation size.  INTSIZE64 raises that ceiling but
+doubles the entry to 16 B, needing ~70 GB and ~150 GB -- neither machine has
+it.  Removing the transient is the only route to those two meshes.
+
+  mastructdedup.c   the deduplicating sink
+  mastruct.c        routes insert()/insertfreq() through it and, when it is
+                    armed, builds irow/jq straight from the sorted key set --
+                    and does not allocate the linked list at all
+  CalculiX.h        prototypes
+  Makefile.inc      new source
+
+HOW IT WORKS.  Pairs are packed into 64-bit keys (column in the high half,
+row in the low half, so sorting the key sorts by column then row -- exactly
+the order jq/irow need) and buffered.  When the buffer fills it is
+radix-sorted, uniqued, and back-merged into one running sorted run; the merge
+writes downward into the grown run array, so it needs no scratch.  Peak memory
+is the buffer plus the final structure, independent of how much duplication
+there is.  The buffer starts at 4 MB and doubles up to CCX_MASTRUCT_BUF
+megabytes (default 512), so a small model never allocates more than it needs.
+
+ONE BACKEND, DELIBERATELY.  An earlier revision also carried an
+open-addressing hash-set sink.  It produced the identical structure but was
+measured slower for it -- 58.4 s against 26.2 s on the 0.0120 structure,
+paying for random probes into a table too big to cache -- and its footprint
+scaled with the structure instead of being a number you set.  It has been
+removed rather than left as a second way to do the same thing.
+
+The element loop and every SPC/MPC branch are untouched -- only the sink the
+pairs flow into changes -- so the constrained-DOF expansion the generic path
+performs is performed identically here.  Substructures (mastructread) and the
+frequency/modal boundary block still walk ipointer/next directly, so neither
+arms the backend: nmethod 2/4/5-7 stays on the legacy path, and a superelement
+is a hard error telling you to rerun with CCX_MASTRUCT_DEDUP=legacy.  That
+variable is the escape hatch for bisecting a suspected regression; there is no
+other setting.
+
+VERIFIED ANSWER-NEUTRAL.  Identical structure and identical reactions against
+the legacy path, on the acceptance decks (LCOL4, undrained, c = 1, unsymmetric
+path, PARDISO out of core):
+
+  L_mesh   path      equations   nonzero lower triangular   F_x on RP-1
+  0.0240   legacy      177 848            16 378 633        1.552992E+07
+  0.0240   dedup       177 848            16 378 633        1.552992E+07
+  0.0120   legacy      603 467            68 318 770        1.208091E+07
+  0.0120   dedup       603 467            68 318 770        1.208091E+07
+
+i.e. E_x = 6.212 GPa at 0.0240 and 4.832 GPa at 0.0120, the values the legacy
+binary returns.  The remaining differences in the .dat files are the transverse
+reactions on RP-2/RP-3, ~1e-14 of the driving reaction, which differ by the
+same amount between two runs of the SAME binary -- the threaded assembly is not
+bitwise reproducible, and that predates this patch.
+
+WHAT IT BUYS.  At 0.0120 the structure phase drops from an 11.7 GB transient to
+3.5 GB peak and 26 s.  The total peak RSS does NOT improve there, because the
+out-of-core factorisation's core budget dominates once the structure is built.
+The point is not 0.0120 -- it is that at 0.0080 and 0.0060 the legacy path
+cannot build the structure AT ALL, at any amount of RAM, and with this it
+builds: 187 006 594 nonzeros at 0.0080, 4.06e8 at 0.0060.
+--- mastruct.c
++++ mastruct.c
+@@ -27,6 +27,24 @@
+ 
+ static ITG *neq1,*irow1,*mast11,*jq1,kflag1,num_cpus;
+ 
++/* F-barES-FEM-T4: the structure builder can send its (dof,dof) pair stream either to
++   the original mast1/next linked list or to a deduplicating backend that
++   collapses duplicates as they arrive (see mastructdedup.c).  The element
++   loop and every SPC/MPC branch below are identical in both cases: only the
++   sink changes.  Selected with CCX_MASTRUCT_DEDUP. */
++
++static void insert_d(ITG *ipointer,ITG **mast1p,ITG **nextp,ITG *i1,
++		     ITG *i2,ITG *ifree,ITG *nzs_){
++  if(msd_active()) msd_insert(i1,i2);
++  else insert(ipointer,mast1p,nextp,i1,i2,ifree,nzs_);
++}
++
++static void insertfreq_d(ITG *ipointer,ITG **mast1p,ITG **nextp,ITG *i1,
++			 ITG *i2,ITG *ifree,ITG *nzs_){
++  if(msd_active()) msd_insertfreq(i1,i2);
++  else insertfreq(ipointer,mast1p,nextp,i1,i2,ifree,nzs_);
++}
++
+ void mastruct(ITG *nk, ITG *kon, ITG *ipkon, char *lakon, ITG *ne,
+ 	      ITG *nodeboun, ITG *ndirboun, ITG *nboun, ITG *ipompc,
+ 	      ITG *nodempc, ITG *nmpc, ITG *nactdof, ITG *icol,
+@@ -339,7 +357,13 @@
+ 
+   ifree=0;
+   nzs_=nzs[1];
+-  NNEW(next,ITG,nzs_);
++
++  /* F-barES-FEM-T4: arm the deduplicating structure backend.  Do it BEFORE the linked
++     list is allocated: when the backend is armed nothing ever walks mast1 or
++     next, so the list is not allocated at all. */
++
++  msd_begin(neq,nmethod,iperturb);
++  if(!msd_active()) NNEW(next,ITG,nzs_);
+ 
+   /* determining the position of each nonzero matrix element in
+      the SUBdiagonal matrix (excluding diagonal): x-elements on
+@@ -388,6 +412,12 @@
+ 	  /* substructure (superelement) 
+              only for mechanical isothermal calculations */
+ 	  
++	  if(msd_active()){
++	    printf("\n *ERROR in mastruct: CCX_MASTRUCT_DEDUP cannot be\n");
++	    printf("        combined with substructure (superelement)\n");
++	    printf("        matrices; rerun with CCX_MASTRUCT_DEDUP=legacy.\n");
++	    exit(1);
++	  }
+ 	  mastructread(ipompc,nodempc,nmpc,nactdof,jq,&mast1,neq,ipointer,
+ 		       &nzs_,nmethod,iperturb,mi,&next,&ifree,&i,ielmat,
+ 		       matname,&icalcnactdof);
+@@ -462,7 +492,7 @@
+ 	  /* check whether one of the DOF belongs to a SPC or MPC */
+ 	  
+ 	  if((jdof1>0)&&(jdof2>0)){
+-	    insert(ipointer,&mast1,&next,&jdof1,&jdof2,&ifree,&nzs_);
++	    insert_d(ipointer,&mast1,&next,&jdof1,&jdof2,&ifree,&nzs_);
+ 	  }
+ 	  else if((jdof1>0)||(jdof2>0)){
+ 	    
+@@ -489,7 +519,7 @@
+ 		while(1){
+ 		  idof2=nactdof[mt*(nodempc[3*index-3]-1)+nodempc[3*index-2]];
+ 		  if(idof2>0){
+-		    insert(ipointer,&mast1,&next,&idof1,&idof2,&ifree,&nzs_);
++		    insert_d(ipointer,&mast1,&next,&idof1,&idof2,&ifree,&nzs_);
+ 
+ 	    /* boundary stiffness coefficients (for frequency
+ 	       and modal dynamic calculations) : x-elements
+@@ -503,7 +533,7 @@
+ 		  }else if(idof2==2*(idof2/2)){
+ 		    if((*nmethod==2)||((*nmethod==4)&&(*iperturb<=1))||((*nmethod>=5)&&(*nmethod<=7))){
+ 		      icolumn=neq[1]-idof2/2;
+-		      insertfreq(ipointer,&mast1,&next,&idof1,&icolumn,&ifree,&nzs_);
++		      insertfreq_d(ipointer,&mast1,&next,&idof1,&icolumn,&ifree,&nzs_);
+ 		    }
+ 		  }
+ 		  index=nodempc[3*index-1];
+@@ -526,7 +556,7 @@
+ 
+ 	    if((*nmethod==2)||((*nmethod==4)&&(*iperturb<=1))||((*nmethod>=5)&&(*nmethod<=7))){
+ 	      icolumn=neq[1]-idof2/2;
+-	      insertfreq(ipointer,&mast1,&next,&idof1,&icolumn,&ifree,&nzs_);
++	      insertfreq_d(ipointer,&mast1,&next,&idof1,&icolumn,&ifree,&nzs_);
+ 	    }
+ 	  }
+ 	  
+@@ -555,7 +585,7 @@
+ 		  while(1){
+ 		    idof2=nactdof[mt*(nodempc[3*index2-3]-1)+nodempc[3*index2-2]];
+ 		    if((idof1>0)&&(idof2>0)){
+-		      insert(ipointer,&mast1,&next,&idof1,&idof2,&ifree,&nzs_);
++		      insert_d(ipointer,&mast1,&next,&idof1,&idof2,&ifree,&nzs_);
+ 
+ 	    /* boundary stiffness coefficients (for frequency
+ 	       and modal dynamic calculations) : x-elements
+@@ -569,12 +599,12 @@
+ 		    }else if((idof1>0)&&(idof2==2*(idof2/2))){
+ 		      if((*nmethod==2)||((*nmethod==4)&&(*iperturb<=1))||((*nmethod>=5)&&(*nmethod<=7))){
+ 			icolumn=neq[1]-idof2/2;
+-			insertfreq(ipointer,&mast1,&next,&idof1,&icolumn,&ifree,&nzs_);
++			insertfreq_d(ipointer,&mast1,&next,&idof1,&icolumn,&ifree,&nzs_);
+ 		      }
+ 		    }else if ((idof2>0)&&(idof1==2*(idof1/2))){
+ 		      if((*nmethod==2)||((*nmethod==4)&&(*iperturb<=1))||((*nmethod>=5)&&(*nmethod<=7))){
+ 			icolumn=neq[1]-idof1/2;
+-			insertfreq(ipointer,&mast1,&next,&idof2,&icolumn,&ifree,&nzs_);
++			insertfreq_d(ipointer,&mast1,&next,&idof2,&icolumn,&ifree,&nzs_);
+ 		      }
+ 		    }
+ 		    index2=nodempc[3*index2-1];
+@@ -604,7 +634,7 @@
+ 		  while(1){
+ 		    idof2=nactdof[mt*(nodempc[3*index2-3]-1)+nodempc[3*index2-2]];
+ 		    if((idof1>0)&&(idof2>0)){
+-		      insert(ipointer,&mast1,&next,&idof1,&idof2,&ifree,&nzs_);
++		      insert_d(ipointer,&mast1,&next,&idof1,&idof2,&ifree,&nzs_);
+ 
+ 	    /* boundary stiffness coefficients (for frequency
+ 	       and modal dynamic calculations) : x-elements
+@@ -618,12 +648,12 @@
+ 		    }else if((idof1>0)&&(idof2==2*(idof2/2))){
+ 		      if((*nmethod==2)||((*nmethod==4)&&(*iperturb<=1))||((*nmethod>=5)&&(*nmethod<=7))){
+ 			icolumn=neq[1]-idof2/2;
+-			insertfreq(ipointer,&mast1,&next,&idof1,&icolumn,&ifree,&nzs_);
++			insertfreq_d(ipointer,&mast1,&next,&idof1,&icolumn,&ifree,&nzs_);
+ 		      }
+ 		    }else if ((idof2>0)&&(idof1==2*(idof1/2))){
+ 		      if((*nmethod==2)||((*nmethod==4)&&(*iperturb<=1))||((*nmethod>=5)&&(*nmethod<=7))){
+ 			icolumn=neq[1]-idof1/2;
+-			insertfreq(ipointer,&mast1,&next,&idof2,&icolumn,&ifree,&nzs_);
++			insertfreq_d(ipointer,&mast1,&next,&idof2,&icolumn,&ifree,&nzs_);
+ 		      }
+ 		    }
+ 		    index2=nodempc[3*index2-1];
+@@ -702,7 +732,7 @@
+ 	  /* check whether one of the DOF belongs to a SPC or MPC */
+ 	  
+ 	  if((jdof1>0)&&(jdof2>0)){
+-	    insert(ipointer,&mast1,&next,&jdof1,&jdof2,&ifree,&nzs_);
++	    insert_d(ipointer,&mast1,&next,&jdof1,&jdof2,&ifree,&nzs_);
+ 	  }
+ 	  else if((jdof1>0)||(jdof2>0)){
+ 	    
+@@ -729,7 +759,7 @@
+ 		while(1){
+ 		  idof2=nactdof[mt*(nodempc[3*index-3]-1)+nodempc[3*index-2]];
+ 		  if(idof2>0){
+-		    insert(ipointer,&mast1,&next,&idof1,&idof2,&ifree,&nzs_);
++		    insert_d(ipointer,&mast1,&next,&idof1,&idof2,&ifree,&nzs_);
+ 		  }
+ 		  index=nodempc[3*index-1];
+ 		  if(index==0) break;
+@@ -745,7 +775,7 @@
+ 
+ 	    if((*nmethod==2)||((*nmethod==4)&&(*iperturb<=1))||((*nmethod>=5)&&(*nmethod<=7))){
+ 	      icolumn=neq[1]-idof2/2;
+-	      insertfreq(ipointer,&mast1,&next,&idof1,&icolumn,&ifree,&nzs_);
++	      insertfreq_d(ipointer,&mast1,&next,&idof1,&icolumn,&ifree,&nzs_);
+ 	    }
+ 
+ 	  }
+@@ -775,7 +805,7 @@
+ 		  while(1){
+ 		    idof2=nactdof[mt*(nodempc[3*index2-3]-1)+nodempc[3*index2-2]];
+ 		    if((idof1>0)&&(idof2>0)){
+-		      insert(ipointer,&mast1,&next,&idof1,&idof2,&ifree,&nzs_);}
++		      insert_d(ipointer,&mast1,&next,&idof1,&idof2,&ifree,&nzs_);}
+ 		    index2=nodempc[3*index2-1];
+ 		    if(index2==0) break;
+ 		  }
+@@ -803,7 +833,7 @@
+ 		  while(1){
+ 		    idof2=nactdof[mt*(nodempc[3*index2-3]-1)+nodempc[3*index2-2]];
+ 		    if((idof1>0)&&(idof2>0)){
+-		      insert(ipointer,&mast1,&next,&idof1,&idof2,&ifree,&nzs_);}
++		      insert_d(ipointer,&mast1,&next,&idof1,&idof2,&ifree,&nzs_);}
+ 		    index2=nodempc[3*index2-1];
+ 		    if(index2==0) break;
+ 		  }
+@@ -838,6 +868,20 @@
+   //        X X    |x x x
+   //        X X X  |x x x
+ 
++  if(msd_active()){
++
++    /* F-barES-FEM-T4: the pairs were deduplicated on the fly and are already sorted
++       by (column,row), so irow/jq come straight out of the key set -- the
++       linked-list walk, the parallel per-column sort and the duplicate
++       removal pass below all become unnecessary. */
++
++    msd_finish(&irow,jq,&nmast);
++    for(i=0;i<neq[1];i++){
++      icol[i]=jq[i+1]-jq[i];
++    }
++
++  }else{
++
+   RENEW(irow,ITG,ifree);
+   nmast=0;
+   jq[0]=1;
+@@ -889,6 +933,8 @@
+     icol[i]=jq[i+1]-jq[i];
+   }
+ 
++  }
++
+   if(neq[0]==0){
+     nzs[0]=0;}
+   else{
+@@ -971,7 +1017,7 @@
+   }
+   else{nzs[2]=nzs[1];}
+ 
+-  SFREE(next);
++  if(next!=NULL) SFREE(next);
+ 
+   *mast1p=mast1;
+   *irowp=irow;
+--- CalculiX.h
++++ CalculiX.h
+@@ -2155,6 +2155,16 @@
+ void insert_cmatrix(ITG *ipointer,ITG **mast1p,ITG **nextp,ITG *i1,
+ 		    ITG *i2,ITG *ifree,ITG *nzs_);
+ 
++/* F-barES-FEM-T4: deduplicating matrix-structure backend, see
++   mastructdedup.c */
++
++int msd_active(void);
++void msd_begin(ITG *neq,ITG *nmethod,ITG *iperturb);
++void msd_add(ITG row,ITG col);
++void msd_insert(ITG *i1,ITG *i2);
++void msd_insertfreq(ITG *i1,ITG *i2);
++void msd_finish(ITG **irowp,ITG *jq,ITG *nmastp);
++
+ void insert(ITG *ipointer,ITG **mast1p,ITG **mast2p,ITG *i1,
+             ITG *i2,ITG *ifree,ITG *nzs_);
+ 
+--- Makefile.inc
++++ Makefile.inc
+@@ -1080,6 +1080,7 @@
+ mastructcmatrix.c \
+ mastructcs.c \
+ mastructdmatrix.c \
++mastructdedup.c \
+ mastructem.c \
+ mastructffem.c \
+ mastructfilter.c \
+--- /dev/null	2026-08-29 08:13:13.544177041 +0300
++++ mastructdedup.c
+@@ -0,0 +1,261 @@
++/*     CalculiX - A 3-dimensional finite element program                 */
++/*              Copyright (C) 1998-2025 Guido Dhondt                     */
++
++/*     This program is free software; you can redistribute it and/or     */
++/*     modify it under the terms of the GNU General Public License as    */
++/*     published by the Free Software Foundation(version 2);             */
++/*                                                                       */
++/*     This program is distributed in the hope that it will be useful,   */
++/*     but WITHOUT ANY WARRANTY; without even the implied warranty of    */
++/*     MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the      */
++/*     GNU General Public License for more details.                      */
++
++/*  F-barES-FEM-T4: memory-bounded global dedup of the matrix structure.
++
++    mastruct.c builds the sparse structure by pushing ONE linked-list entry
++    per (dof,dof) pair of every element onto mast1/next and compressing only
++    afterwards.  The transient list is therefore as large as the SUM of the
++    per-element patterns, while the structure that survives is their UNION.
++
++    For the F-bar ES-FEM U3 volumetric elements those differ by ~24x --
++    measured on the LCOL4 cell: 1.66e9 offered against 68 318 770 distinct at
++    L_mesh 0.0120, and 9.47e9 against 4.06e8 at 0.0060 -- because the same
++    pair is produced by ~24 different edges.  The duplication is ACROSS
++    elements: within one element the jj/ll loop already emits each pair
++    exactly once, so a per-element "direct" builder cannot remove any of it.
++    Past 2^31 entries the ITG index overflows and ccx dies in u_realloc with
++    a negative allocation size, which is what put 0.0080 and 0.0060 out of
++    reach at any amount of RAM.
++
++    This deduplicates the pair stream as it arrives, so peak memory tracks the
++    final structure rather than the transient:
++
++      pairs are packed into 64-bit keys and buffered; when the buffer fills it
++      is radix-sorted, uniqued, and back-merged into one running sorted run.
++
++    The buffer starts small and doubles, up to CCX_MASTRUCT_BUF megabytes
++    (default 512), so a small model never allocates more than it needs while
++    a large one still amortises its merges.
++
++    An earlier revision also carried an open-addressing hash-set backend.  It
++    was measured slower for the same result -- 58.4 s against 26.2 s on the
++    0.0120 structure, because it pays for random probes into a table too big
++    to cache -- and its footprint scaled with the structure instead of being a
++    number you set, so it has been removed.
++
++    CCX_MASTRUCT_DEDUP=legacy falls back to the original linked list, for
++    bisecting a suspected regression.  The element loop and every SPC/MPC
++    branch in mastruct.c are identical either way: only the sink changes.   */
++
++#include <stdlib.h>
++#include <stdio.h>
++#include <string.h>
++#include <stdint.h>
++#include <time.h>
++#include "CalculiX.h"
++
++/* key = column (0-based, high 32 bits) | row (1-based, low 32 bits);
++   sorting the key sorts by column then row, which is exactly the order
++   jq/irow need.  row >= 1 always, so key 0 can never occur. */
++#define MSD_KEY(row,col) ((((uint64_t)(uint32_t)(col))<<32)|(uint32_t)(row))
++
++#define MSD_BUF0 (4u*1024u*1024u)      /* 4 MB: 512k pairs to start */
++
++static int msd_on=0;                   /* backend armed for this call */
++static ITG msd_neq=0;
++
++static uint64_t *msd_buf=NULL,*msd_scr=NULL;
++static size_t msd_bufn=0,msd_bufcap=0,msd_bufmax=0;
++static uint64_t *msd_run=NULL;
++static size_t msd_runn=0,msd_runcap=0;
++
++static double msd_t0=0.0;
++static size_t msd_nadd=0,msd_spills=0;
++
++static double msd_now(void){
++  struct timespec ts;
++  clock_gettime(CLOCK_MONOTONIC,&ts);
++  return ts.tv_sec+1.0e-9*ts.tv_nsec;
++}
++
++static long msd_hwm(void){          /* peak RSS in kB */
++  FILE *f=fopen("/proc/self/status","r");
++  char l[256]; long v=0;
++  if(!f) return 0;
++  while(fgets(l,sizeof(l),f)) if(strncmp(l,"VmHWM:",6)==0){sscanf(l+6,"%ld",&v);break;}
++  fclose(f);
++  return v;
++}
++
++int msd_active(void){ return msd_on; }
++
++/* ---------------------------------------------------------------- radix */
++
++static void msd_radix(uint64_t *a,uint64_t *tmp,size_t n){
++  static size_t cnt[65536];
++  uint64_t *src=a,*dst=tmp,*t;
++  int pass,b;
++  size_t i,s,c;
++  for(pass=0;pass<4;pass++){
++    int sh=pass*16;
++    memset(cnt,0,sizeof(cnt));
++    for(i=0;i<n;i++) cnt[(src[i]>>sh)&0xffff]++;
++    s=0;
++    for(b=0;b<65536;b++){c=cnt[b];cnt[b]=s;s+=c;}
++    for(i=0;i<n;i++) dst[cnt[(src[i]>>sh)&0xffff]++]=src[i];
++    t=src;src=dst;dst=t;
++  }
++  /* 4 passes = even number of swaps, result is back in a */
++}
++
++/* ----------------------------------------------------------- merge/spill */
++
++static void msd_oom(const char *what,size_t n){
++  printf("\n *ERROR in mastructdedup: out of memory for %s (%zu entries)\n",
++         what,n);
++  exit(1);
++}
++
++static void msd_merge(void){
++  size_t need=msd_runn+msd_bufn,i,j,w,newn;
++  uint64_t v,last=0;
++  int have=0;
++  if(need>msd_runcap){
++    uint64_t *p=(uint64_t *)realloc(msd_run,need*sizeof(uint64_t));
++    if(p==NULL) msd_oom("the running structure",need);
++    msd_run=p; msd_runcap=need;
++  }
++  /* back-merge run[0..runn) with buf[0..bufn) into run[..need), dropping
++     duplicates; writing downward from need never overtakes either read
++     cursor, so no scratch array is needed */
++  i=msd_runn; j=msd_bufn; w=need;
++  while(i>0||j>0){
++    if(i>0&&(j==0||msd_run[i-1]>=msd_buf[j-1])){
++      v=msd_run[i-1];
++      if(j>0&&msd_buf[j-1]==v) j--;
++      i--;
++    }else{
++      v=msd_buf[j-1]; j--;
++    }
++    if(have&&v==last) continue;
++    msd_run[--w]=v; last=v; have=1;
++  }
++  newn=need-w;
++  memmove(msd_run,msd_run+w,newn*sizeof(uint64_t));
++  msd_runn=newn;
++}
++
++static void msd_spill(void){
++  size_t t,k=0;
++  if(msd_bufn==0) return;
++  msd_radix(msd_buf,msd_scr,msd_bufn);
++  for(t=0;t<msd_bufn;t++) if(k==0||msd_buf[t]!=msd_buf[k-1]) msd_buf[k++]=msd_buf[t];
++  msd_bufn=k;
++  msd_merge();
++  msd_bufn=0;
++  msd_spills++;
++
++  /* a model that keeps spilling is big enough to deserve a bigger window:
++     double up to the cap, so small models stay cheap */
++  if(msd_bufcap<msd_bufmax){
++    size_t want=msd_bufcap*2;
++    uint64_t *a,*b;
++    if(want>msd_bufmax) want=msd_bufmax;
++    a=(uint64_t *)realloc(msd_buf,want*sizeof(uint64_t));
++    if(a!=NULL){
++      msd_buf=a;
++      b=(uint64_t *)realloc(msd_scr,want*sizeof(uint64_t));
++      if(b!=NULL){msd_scr=b; msd_bufcap=want;}
++    }
++  }
++}
++
++/* --------------------------------------------------------------- driver */
++
++void msd_begin(ITG *neq,ITG *nmethod,ITG *iperturb){
++  size_t mb=512;
++  const char *e;
++  msd_on=0;
++
++  if((e=getenv("CCX_MASTRUCT_DEDUP"))!=NULL&&strcmp(e,"legacy")==0){
++    printf(" SPAX: CCX_MASTRUCT_DEDUP=legacy, using the original linked list\n");
++    return;
++  }
++
++  /* the frequency/modal boundary block (neq[1]..neq[2]) still walks
++     ipointer/next directly; leave those methods on the legacy path */
++  if((*nmethod==2)||((*nmethod==4)&&(*iperturb<=1))||
++     ((*nmethod>=5)&&(*nmethod<=7))){
++    return;
++  }
++
++  if((e=getenv("CCX_MASTRUCT_BUF"))!=NULL){
++    mb=(size_t)atol(e);
++    if(mb<4) mb=4;
++  }
++  msd_bufmax=mb*1024*1024/sizeof(uint64_t);
++  msd_bufcap=MSD_BUF0/sizeof(uint64_t);
++  if(msd_bufcap>msd_bufmax) msd_bufcap=msd_bufmax;
++
++  msd_buf=(uint64_t *)malloc(msd_bufcap*sizeof(uint64_t));
++  msd_scr=(uint64_t *)malloc(msd_bufcap*sizeof(uint64_t));
++  if(msd_buf==NULL||msd_scr==NULL) msd_oom("the sort buffer",msd_bufcap);
++
++  msd_neq=neq[1];
++  msd_nadd=0; msd_spills=0; msd_runn=0; msd_bufn=0;
++  msd_t0=msd_now();
++  msd_on=1;
++}
++
++void msd_add(ITG row,ITG col){
++  msd_nadd++;
++  if(msd_bufn==msd_bufcap) msd_spill();
++  msd_buf[msd_bufn++]=MSD_KEY(row,col);
++}
++
++/* mirrors insert.c: lower triangle, diagonal excluded */
++void msd_insert(ITG *i1,ITG *i2){
++  if(*i1==*i2) return;
++  if(*i1<*i2) msd_add(*i2,*i1-1);
++  else        msd_add(*i1,*i2-1);
++}
++
++/* mirrors insertfreq.c: raw (row,column), no reordering */
++void msd_insertfreq(ITG *i1,ITG *i2){
++  msd_add(*i1,*i2-1);
++}
++
++void msd_finish(ITG **irowp,ITG *jq,ITG *nmastp){
++  ITG *irow=*irowp,col=0,r,c;
++  size_t t,p=0,n;
++
++  msd_spill();
++  n=msd_runn;
++
++  /* the sort buffer is dead the moment the last spill is merged; give it
++     back before irow is grown, so the two peaks do not overlap */
++  free(msd_buf); msd_buf=NULL;
++  free(msd_scr); msd_scr=NULL;
++  msd_bufcap=0; msd_bufn=0;
++
++  RENEW(irow,ITG,n>0?n:1);
++  jq[0]=1;
++  for(t=0;t<n;t++){
++    c=(ITG)(msd_run[t]>>32);
++    r=(ITG)(msd_run[t]&0xffffffffu);
++    while(col<c){jq[col+1]=(ITG)(p+1);col++;}
++    irow[p++]=r;
++  }
++  while(col<msd_neq){jq[col+1]=(ITG)(p+1);col++;}
++
++  printf(" SPAX: structure dedup: %.4e pairs offered, %zu distinct"
++         " (%.1fx), %zu spill(s), %.1f s, peak RSS %.2f GB\n",
++         (double)msd_nadd,n,msd_nadd?(double)msd_nadd/(double)(n?n:1):0.0,
++         msd_spills,msd_now()-msd_t0,msd_hwm()/1048576.0);
++
++  free(msd_run); msd_run=NULL; msd_runcap=0; msd_runn=0;
++  msd_on=0;
++
++  *irowp=irow;
++  *nmastp=(ITG)p;
++}

@@ -1,0 +1,154 @@
+Stop holding the deck twice, and say which allocation is about to fail.
+
+TWO THINGS, FOUND THE SAME WAY.  A deck that dies in the kernel OOM killer
+never reaches u_calloc's own error path, so ccx tells you nothing about what
+it was trying to allocate.  CCX_ALLOC_TRACE=<MB> logs every allocation at or
+above that size -- variable, size, and the source line that asked for it --
+BEFORE it is attempted.  On the LCOL4 0.0060 undrained cell that turned a
+silent kill into a list, and the list had an obvious entry in it.
+
+  u_calloc.c    CCX_ALLOC_TRACE=<MB>, on the way in
+  u_realloc.c   the same
+  readinput.c   the entry it found
+
+inpc IS THE DECK, HELD AS TEXT, PADDED TO 132 BYTES A LINE.  readinput grows
+it 1.1x while reading, then finishes with
+
+    RENEW(inpc,char,132**nline);
+
+which reserves the maximum line length for every line whatever it actually
+holds.  On the 0.0060 deck that is 3.110 GB against ~1.7 GB of content.  It
+is not transient either: inpc is freed with ipoinp/inp at the very end of
+ccx_2.23.c, after the last step, so the slack is held through the whole
+factorisation.
+
+Every reader goes through the offset table -- getnewline.f walks
+ipoinpc(iline-1)+1 .. ipoinpc(iline), and the only fixed 132 strides in the
+tree are on textpart, a different array -- so ipoinpc[*nline] is exactly the
+number of characters stored, and sizing to it is the same deck in less space:
+
+    L_mesh 0.0060 undrained, 1.7 GB deck
+      before   grows to 1.734 GB, then RENEW UP to 3.110 GB
+      after    grows to 1.734 GB, then RENEW DOWN to 1.592 GB
+
+1.52 GB, on a run whose problem is that it does not fit.
+
+VERIFIED ANSWER-NEUTRAL on the 0.0240 acceptance deck: F_x = 1.552992E+07 in
+double, unchanged to every digit.
+
+The trace is off unless the variable is set, and costs one comparison per
+allocation when it is.  What it reported on 0.0060, for the record:
+
+  realloc inpc          1.592 GB   readinput.c:488
+  calloc  kon           0.768 GB   ccx_2.23.c:237
+  calloc  prestr        0.671 GB   ccx_2.23.c:440
+  calloc  sti           0.671 GB   ccx_2.23.c:722
+  calloc  eme           0.671 GB   ccx_2.23.c:726
+  realloc irow          1.511 GB   mastructdedup.c:241
+  calloc  xstiff        3.019 GB   linstatic.c:334
+  realloc au            6.043 GB   linstatic.c:475
+  calloc  au1           6.043 GB   mafillsmasmain.c:207
+  calloc  aupardiso     6.071 GB   pardiso.c:302
+
+No single allocation is pathological; the deck is simply large.  Note that
+prestr, sti and eme are sized over ALL elements, and on an F-bar deck most
+elements are U2/U3 smoothing domains that carry no stress at all -- that is
+~2 GB allocated for elements that never write to it, and is left alone here.
+--- readinput.c
++++ readinput.c
+@@ -477,7 +477,15 @@
+   }while(1);
+ 
+   inp[3*ipoinp[2*ikey-1]-2]=*nline;
+-  RENEW(inpc,char,(long long)132**nline);
++  /* F-barES-FEM-T4: size inpc to what was actually read, not to 132 bytes per line.
++     Every access goes through the ipoinpc offset table -- getnewline.f walks
++     ipoinpc(iline-1)+1 .. ipoinpc(iline) and nothing strides inpc at a fixed
++     132 -- so ipoinpc[*nline] is exactly the number of characters stored.
++     Padding every line to the maximum costs, on the LCOL4 0.0060 deck,
++     3.110 GB against ~1.7 GB of content, and inpc lives until the very end
++     of the run (it is freed with ipoinp/inp only after the last step), so
++     that slack is held straight through the factorisation. */
++  RENEW(inpc,char,ipoinpc[*nline]>0?ipoinpc[*nline]:1);
+   
+   *inp_size=3*ipoinp[2*ikey-1];
+   RENEW(inp,ITG,*inp_size);
+--- u_calloc.c
++++ u_calloc.c
+@@ -26,6 +26,28 @@
+  Diehl program
+ */
+ 
++
++/* F-barES-FEM-T4: CCX_ALLOC_TRACE=<MB> logs every allocation at or above that size,
++   with the variable name and the source line that asked for it, BEFORE the
++   allocation is attempted.  A deck that dies inside the kernel OOM killer
++   never reaches u_calloc's own error path, so the only way to learn which
++   array was being grown is to print it on the way in. */
++static void msd_trace(const char *what,const char *ptr_name,const char *file,
++                      int line,size_t bytes){
++  static double thr=-1.0;
++  const char *e;
++  if(thr<0.0){
++    e=getenv("CCX_ALLOC_TRACE");
++    thr=(e!=NULL)?atof(e):0.0;
++    if(thr<=0.0) thr=1.0e30; else thr*=1048576.0;
++  }
++  if((double)bytes>=thr){
++    printf(" SPAX alloc %-8s %-14s %8.3f GB   %s:%d\n",
++           what,ptr_name,bytes/1073741824.0,file,line);
++    fflush(stdout);
++  }
++}
++
+ void *u_calloc(size_t num,size_t size,const char *file,const int line, const char* ptr_name){
+ 
+     /* allocating num elements of size bytes and initializing them to zero */
+@@ -38,6 +60,7 @@
+     return(a);
+   }
+       
++  msd_trace("calloc",ptr_name,file,line,num*size);
+   a=calloc(num,size);
+   if(a==NULL){
+     printf(" *ERROR in u_calloc: error allocating memory\n");
+--- u_realloc.c
++++ u_realloc.c
+@@ -25,6 +25,28 @@
+  Diehl program
+ */
+ 
++
++/* F-barES-FEM-T4: CCX_ALLOC_TRACE=<MB> logs every allocation at or above that size,
++   with the variable name and the source line that asked for it, BEFORE the
++   allocation is attempted.  A deck that dies inside the kernel OOM killer
++   never reaches u_calloc's own error path, so the only way to learn which
++   array was being grown is to print it on the way in. */
++static void msd_trace_r(const char *what,const char *ptr_name,const char *file,
++                      int line,size_t bytes){
++  static double thr=-1.0;
++  const char *e;
++  if(thr<0.0){
++    e=getenv("CCX_ALLOC_TRACE");
++    thr=(e!=NULL)?atof(e):0.0;
++    if(thr<=0.0) thr=1.0e30; else thr*=1048576.0;
++  }
++  if((double)bytes>=thr){
++    printf(" SPAX alloc %-8s %-14s %8.3f GB   %s:%d\n",
++           what,ptr_name,bytes/1073741824.0,file,line);
++    fflush(stdout);
++  }
++}
++
+ void *u_realloc(void* ptr,size_t size,const char *file,const int line, const char* ptr_name){
+ 
+     /* reallocating a field with pointer ptr to size bytes */
+@@ -32,6 +54,8 @@
+   void *a;
+   char *env;
+ 
++  msd_trace_r("realloc",ptr_name,file,line,size);
++
+   a=realloc(ptr,size);
+ 
+   if(a==NULL && ptr!=NULL && size!=0){

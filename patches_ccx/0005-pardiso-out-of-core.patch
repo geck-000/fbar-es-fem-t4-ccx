@@ -1,0 +1,203 @@
+Opt-in out-of-core PARDISO, for factors that do not fit in RAM.
+
+Patch 0011 removed the mastruct wall and LMESH_m0p0120 at F-barES-FEM-T4
+c = 1 now builds its structure -- 600662 equations, 68.6M nonzeros -- and
+dies in the FACTORISATION instead.  Through the unsymmetric path, which
+stores both triangles, MKL PARDISO asked for ~44 GB of virtual memory and
+was killed at 27.2 GB anon-rss on a 30 GB machine.  Reducing threads does
+not help: 4 threads peaked HIGHER (27.2 GB) than 8 did before the global
+OOM killer took the earlier run (24.5 GB), so the factor itself is the term
+that matters, not the per-thread buffers.
+
+Nothing else on this machine can absorb it.  Swap is zram -- RAM-backed, so
+it adds no capacity -- and /tmp is tmpfs, so a 263 MB deck staged there is
+itself RAM.  What there is, is 812 GB of NVMe.
+
+MKL PARDISO can spill the factor to disk: iparm(60)=2, in sequential blocks
+sized by MKL_PARDISO_OOC_MAX_CORE_SIZE, written to MKL_PARDISO_OOC_PATH
+(default ./ooc_temp, i.e. the deck directory -- so keep the deck on real
+disk).  ccx does not expose it.
+
+  pardiso.c   CCX_PARDISO_OOC=<MB> turns it on and sets the core budget.
+
+IT IS OPT-IN, AND THAT IS NOT TIMIDITY.  Reaching iparm(60) requires
+iparm(1)=1 -- "use the values in iparm" -- which means every other entry
+becomes a deliberate value instead of an MKL default, and pardisoinit is the
+only supported way to obtain a consistent set.  Stock runs never enter the
+branch, keep iparm(1)=0, and are bit-for-bit unaffected.
+
+VERIFIED ANSWER-NEUTRAL.  The acceptance decks at c = 1, in core and out of
+core with a 256 MB budget, agree exactly:
+
+  patch test, max|u - eps.X|/max|u|     3.165e-07   both
+  confined C1111 (exact 2.204400e+08)   2.204400e+08 both
+
+MTYPE 1 MUST BECOME 11 UNDER OUT-OF-CORE, OR THE FACTOR DIES.
+
+MKL PARDISO supports out-of-core ONLY for mtype = -2 and 11, not for
+mtype = 1 (structurally symmetric, numerically asymmetric).  The F-bar
+asymmetric path (linstatic.c sets symmetryflag=2, inputformat=1) lands on
+mtype = 1 in core and works there; with iparm(60)=2 the same matrix returns
+error -10 ("no license" / unsupported type) and the factor never starts.
+
+The inputformat=1 branch already composes the FULL general matrix (lower
+triangle + diagonal + upper triangle) into aupardiso/icolpardiso/pointers,
+so it is a genuine general matrix and may be factored as mtype = 11.  The
+switch is therefore made at the top of pardiso_factor, and mirrored in
+pardiso_solve and pardiso_cleanup so all three phases agree (a mismatched
+solve phase returns error -1).  In-core runs keep mtype = 1 and are
+unchanged.  The in-core budget must also be large enough: CCX_PARDISO_OOC
+= 4096 and 8192 return error -9 ("not enough memory") on the 0.0120 F-bar
+deck; 16384 works with a 22.6 GB peak RSS.
+
+AND CHECK THE RETURN CODE, WHICH ccx NEVER DID.
+
+pardiso.c hands &error to all three phases and reads it nowhere.  So ANY
+PARDISO failure -- out of memory, a zero pivot, an out-of-core scratch path
+that does not exist -- was silently ignored and ccx carried on with an
+unfactored system, returning a plausible-looking wrong answer.
+
+That is not hypothetical and it is how this was found.  An out-of-core run
+whose MKL_PARDISO_OOC_PATH pointed at a missing directory (the driver ran
+from the repo root, so ./ooc_temp was not where it thought) returned
+
+    E_und = 3.83e+11   against   5.52e+09 in core
+
+on the same deck and the same binary -- a modulus forty times stiffer than
+solid ice.  Nothing in the log said so.  The ONLY reason it was caught is
+that the traction-free transverse reaction read 1.85e-02 of the driven one
+instead of the 5e-14 every healthy run gives.
+
+pardiso_factor and pardiso_solve now stop with the error code and the phase.
+Verified: the same bad path now exits 201 with
+
+  *ERROR in pardiso_factor: PARDISO returned error -10 (phase 12, mtype 1).
+         The system was NOT solved.
+
+This check is worth more than the out-of-core switch it was added for: it
+guards every PARDISO run in the repository, and a silent wrong answer from a
+direct solver is the worst failure mode this campaign has.
+
+--- pardiso.c
++++ pardiso.c
+@@ -27,6 +27,8 @@
+ 
+ #include <mkl_service.h>
+ 
++void FORTRAN(pardisoinit,(long long *pt,ITG *mtype,ITG *iparm));
++
+ ITG *icolpardiso=NULL,*pointers=NULL,iparm[64];
+ long long pt[64];
+ double *aupardiso=NULL;
+@@ -297,6 +299,47 @@
+     }
+   }
+ 
++  /* SPAX: CCX_PARDISO_OOC=<MB> factors OUT OF CORE.
++
++     MKL PARDISO keeps the whole factor in RAM by default, and for a wide
++     user element that is the binding constraint long before the matrix is.
++     LMESH_m0p0120 at F-barES-FEM-T4 c=1 -- 600662 equations, 68.6M nonzeros
++     through the UNSYMMETRIC path, which stores both triangles -- asks for
++     ~44 GB of virtual and was killed at 27.2 GB anon-rss on a 30 GB machine.
++
++     iparm(60)=2 spills the factor to disk instead, in sequential blocks
++     sized by MKL_PARDISO_OOC_MAX_CORE_SIZE (MB).  Files go to
++     MKL_PARDISO_OOC_PATH, default ./ooc_temp -- the deck directory, so keep
++     the deck on real disk, not on tmpfs.
++
++     It is OPT-IN and does nothing unless the variable is set: reaching it
++     needs iparm(1)=1 ("use the values in iparm"), which means every other
++     entry has to be a deliberate value rather than an MKL default, and
++     pardisoinit is the only supported way to get those.  Stock runs keep
++     iparm(1)=0 and are bit-for-bit unaffected. */
++
++  env=getenv("CCX_PARDISO_OOC");
++  if(env!=NULL){
++    FORTRAN(pardisoinit,(pt,&mtype,iparm));
++    iparm[0]=1;
++    iparm[59]=2;
++    setenv("MKL_PARDISO_OOC_MAX_CORE_SIZE",env,1);
++    printf(" SPAX: PARDISO out-of-core, max core %s MB, files in %s\n",
++	   env,getenv("MKL_PARDISO_OOC_PATH")?
++	   getenv("MKL_PARDISO_OOC_PATH"):"./ooc_temp");
++    fflush(stdout);
++
++    /* SPAX: MKL PARDISO supports out-of-core only for mtype = -2 and 11, NOT
++       for mtype = 1 (structurally symmetric, numerically asymmetric).  The
++       inputformat=1 branch above (the asymmetric / F-bar path of linstatic.c)
++       has already composed the FULL general matrix into aupardiso,
++       icolpardiso, pointers -- lower triangle, diagonal AND upper triangle --
++       so it is a genuine general matrix and may be factored as mtype = 11.
++       Passing the same matrix with iparm(60)=2 under mtype = 1 makes PARDISO
++       return error -10 and the solve dies.  In-core runs keep mtype = 1. */
++    if(mtype==1) mtype=11;
++  }
++
+ /* next line is for the simulateous use of PARDISO and PaStiX */
+ 
+   mkl_domain_set_num_threads(mthread_mkl,MKL_DOMAIN_PARDISO);
+@@ -305,6 +348,27 @@
+ 		   pointers,icolpardiso,perm,&nrhs,iparm,&msglvl,
+                    b,x,&error));
+ 
++  /* SPAX: PARDISO's return code was passed and never read.
++     ccx hands &error to all three phases and looks at it nowhere, so ANY
++     failure -- out of memory, a singular matrix, an out-of-core scratch path
++     that does not exist -- is silently ignored and the run continues on an
++     unfactored system, returning a plausible-looking wrong answer.
++     Found the hard way: an out-of-core factorisation whose
++     MKL_PARDISO_OOC_PATH pointed at a missing directory returned E_und
++     3.83e+11 against 5.52e+09 in core, and the only reason it was caught is
++     that the traction-free transverse reaction read 1.85e-02 instead of
++     5e-14.  A solver that cannot factor the matrix must stop, not guess. */
++
++  if(error!=0){
++    printf("\n *ERROR in %s: PARDISO returned error %" ITGFORMAT
++	   " (phase %" ITGFORMAT ", mtype %" ITGFORMAT ").\n",
++	   "pardiso_factor",error,phase,mtype);
++    printf("       The system was NOT solved.  Common causes: -2 out of\n");
++    printf("       memory; -4 zero pivot / singular matrix; -11 out-of-core\n");
++    printf("       scratch path missing or unwritable (MKL_PARDISO_OOC_PATH).\n");
++    exit(201);
++  }
++
+   return;
+ }
+ 
+@@ -330,6 +394,10 @@
+       mtype=1;
+     }
+   }
++  /* SPAX: match pardiso_factor's out-of-core mtype upgrade, or the solve
++     phase (33) disagrees with the factor phase (12) and PARDISO returns
++     error -1.  MKL out-of-core supports only mtype -2 and 11. */
++  if(mtype==1 && getenv("CCX_PARDISO_OOC")!=NULL) mtype=11;
+   iparm[1]=3;
+   
+   /* pardiso_factor has been called before, MKL_NUM_THREADS=mthread_mkl is set*/
+@@ -342,6 +410,14 @@
+ 		   pointers,icolpardiso,perm,nrhs,iparm,&msglvl,
+                    b,x,&error));
+ 
++  /* SPAX: same reason as in pardiso_factor -- a failed solve must stop. */
++  if(error!=0){
++    printf("\n *ERROR in pardiso_solve: PARDISO returned error %" ITGFORMAT
++	   " (phase %" ITGFORMAT ").  The system was NOT solved.\n",
++	   error,phase);
++    exit(201);
++  }
++
+   for(i=0;i<*nrhs**neq;i++){b[i]=x[i];}
+   SFREE(x);
+ 
+@@ -363,6 +439,9 @@
+       mtype=1;
+     }
+   }
++  /* SPAX: keep the cleanup phase (-1) on the same mtype the factor and solve
++     phases used under out-of-core (11, not 1). */
++  if(mtype==1 && getenv("CCX_PARDISO_OOC")!=NULL) mtype=11;
+ 
+   FORTRAN(pardiso,(pt,&maxfct,&mnum,&mtype,&phase,neq,aupardiso,
+ 		   pointers,icolpardiso,perm,&nrhs,iparm,&msglvl,

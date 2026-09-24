@@ -1,0 +1,52 @@
+Finite-strain U3 force (stage 1 of the NLGEOM port).
+
+Under NLGEOM the U3 element returns the Hencky-elastic force of
+eqs. (1)-(17) through the new kernel u3nl.f, which shares its geometry and
+its weight walk with u3vol.f.  U2 returns NO separate force in that mode:
+the finite-strain force evaluates the full Hencky stress of Fbar and pairs
+it with the ES-FEM motion, so its linearisation IS U2 + U3 -- adding the
+small-strain deviatoric force on top of it would count the deviatoric half
+twice.  The stiffness split is untouched and remains the iteration matrix.
+
+The force is validated inside ccx against the prototype: on a NLGEOM
+boundary-value problem the reactions at the prescribed boundary equal
+FbarNL.force(u_ccx) to 1.4e-7 (elements_ccx/tests/verify_nlccx.py), and the
+finite-strain branch is measurably active (5.6e-2 away from the linear
+force).  The consistent tangent is stage 2; until it lands the modified
+Newton converges only at small strain.
+
+  Makefile.inc        builds u3nl.f
+  resultsmech_u.f     passes iperturb to the U2/U3 dispatchers
+
+The element sources themselves (u3nl.f, resultsmech_u2.f, resultsmech_u3.f)
+live in ../elements_ccx/ and are copied into src/ before building; add
+u3nl.f to SCCXF as this patch does.
+
+--- resultsmech_u.f
++++ resultsmech_u.f
+@@ -73,13 +73,13 @@
+ !     SPAX: U3 F-barES-FEM-T4 volumetric edge domain
+ !
+          call resultsmech_u3(co,kon,ipkon,lakon,ne,v,elcon,nelcon,
+-     &        ielmat,mi,ncmat_,ntmat_,fn,calcul_fn,nal,nelem)
++     &        ielmat,mi,ncmat_,ntmat_,fn,calcul_fn,nal,nelem,iperturb)
+       elseif(lakon(nelem)(2:2).eq.'2') then
+ !
+ !     SPAX: U2 F-barES-FEM-T4 deviatoric edge domain
+ !
+          call resultsmech_u2(co,kon,ipkon,lakon,ne,v,elcon,nelcon,
+-     &        ielmat,mi,ncmat_,ntmat_,fn,calcul_fn,nal,nelem)
++     &        ielmat,mi,ncmat_,ntmat_,fn,calcul_fn,nal,nelem,iperturb)
+       elseif(lakon(nelem)(2:2).eq.'4') then
+ !
+ !     SPAX: U4 null base tetrahedron of the F-barES-FEM-T4 element
+--- Makefile.inc
++++ Makefile.inc
+@@ -279,6 +279,7 @@
+ 	e_c3d_u3.f \
+ 	u2edge.f \
+ 	u3vol.f \
++	u3nl.f \
+ 	resultsmech_u2.f \
+ 	resultsmech_u3.f \
+ 	e_c3d_u4.f \

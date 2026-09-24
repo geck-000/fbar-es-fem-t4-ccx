@@ -1,0 +1,276 @@
+Wire the F-barES-FEM-T4 element (U2 + U3 + U4) into ccx.
+
+Adds the two elements of Onishi, Iida & Amaya, Int. J. Comput. Methods
+15(7) 1845003 (2018) as user elements, one per edge smoothing domain, plus
+the null base tetrahedron U4:
+
+  U2  deviatoric   V_h B~^T D_dev B~      (ES-FEM)
+  U3  volumetric   (K V_h) tbar^T sbar    (F-bar, non-symmetric)
+  U4  null base    geometry carrier, no stiffness
+
+The element sources (u2edge.f, u3vol.f, e_c3d_u2.f, e_c3d_u3.f, e_c3d_u4.f,
+resultsmech_u2.f, resultsmech_u3.f, resultsmech_u4.f, fbar_lock.c) live in
+../elements_ccx/ and are copied into src/; add them to SCCXF/SCCXC.
+This patch is the dispatcher branches, the user-element digit list in
+mastruct.c, the user-element EVOL branch in printoutelem.f, and the build.
+
+--- e_c3d_u.f
++++ e_c3d_u.f
+@@ -17,7 +17,8 @@
+ !     Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
+ !     
+       subroutine e_c3d_u(co,kon,lakonl,p1,p2,omx,bodyfx,nbody,s,sm,
+-     &     ff,nelem,nmethod,elcon,nelcon,rhcon,nrhcon,alcon,nalcon,
++     &     ff,nelem,lakon,ne,nmethod,elcon,nelcon,rhcon,nrhcon,alcon,
++     &     nalcon,
+      &     alzero,ielmat,ielorien,norien,orab,ntmat_,
+      &     t0,t1,ithermal,vold,iperturb,nelemload,
+      &     sideload,xload,nload,idist,sti,stx,iexpl,plicon,
+@@ -47,11 +48,12 @@
+ !     
+       integer mass(*),stiffness,buckling,rhsi,coriolis
+ !     
+-      character*8 lakonl
++      character*8 lakonl,lakon(*)
+       character*20 sideload(*)
+       character*80 matname(*),amat
+       character*81 tieset(3,*)
+ !     
++      integer ne
+       integer konl(20),nelemload(2,*),nbody,nelem,mi(*),kon(*),
+      &     ielprop(*),null,index,mattyp,ithermal(*),iperturb(*),nload,
+      &     idist,
+@@ -63,12 +65,12 @@
+      &     ialset(*),ntie,integerglob(*),nasym,nplicon(0:ntmat_,*),
+      &     nplkcon(0:ntmat_,*),npmat_
+ !     
+-      real*8 co(3,*),xl(3,20),veold(0:mi(2),*),rho,s(60,60),bodyfx(3),
+-     &     ff(60),elconloc(ncmat_),coords(3),p1(3),
++      real*8 co(3,*),xl(3,20),veold(0:mi(2),*),rho,s(765,765),bodyfx(3),
++     &     ff(765),elconloc(ncmat_),coords(3),p1(3),
+      &     p2(3),eth(6),rhcon(0:1,ntmat_,*),reltime,prop(*),
+      &     alcon(0:6,ntmat_,*),alzero(*),orab(7,*),t0(*),t1(*),
+      &     xloadold(2,*),vold(0:mi(2),*),xload(2,*),omx,e,un,um,tt,
+-     &     sm(60,60),sti(6,mi(1),*),stx(6,mi(1),*),t0l,t1l,coefmpc(*),
++     &     sm(765,765),sti(6,mi(1),*),stx(6,mi(1),*),t0l,t1l,coefmpc(*),
+      &     thicke(mi(3),*),doubleglob(*),dl,
+      &     plicon(0:2*npmat_,ntmat_,*),plkcon(0:2*npmat_,ntmat_,*),
+      &     xstiff(27,mi(1),*),plconloc(802),dtime,ttime,time,
+@@ -88,6 +90,28 @@
+      &       ne0,ipkon,thicke,integerglob,doubleglob,tieset,istartset,
+      &       iendset,ialset,ntie,nasym,ielprop,prop)
+ !        
++      elseif(lakonl(2:2).eq.'3') then
++!
++!       F-barES-FEM-T4: U3, F-barES-FEM-T4 volumetric edge domain.  Its matrix is NOT
++!       symmetric (eq. 17), so it raises nasym and mafillsmas re-assembles it
++!       in full; mafillsm skips it once nasym is set.
++!
++        call e_c3d_u3(co,kon,lakonl,s,sm,ff,nelem,elcon,nelcon,
++     &       ielmat,mi,ncmat_,ntmat_,ipkon,lakon,ne,stiffness,nasym)
++!
++      elseif(lakonl(2:2).eq.'2') then
++!
++!       F-barES-FEM-T4: U2, F-barES-FEM-T4 deviatoric edge domain (ES-FEM)
++!
++        call e_c3d_u2(co,kon,lakonl,s,sm,ff,nelem,elcon,nelcon,
++     &       ielmat,mi,ncmat_,ntmat_,ipkon,lakon,ne,stiffness)
++!
++      elseif(lakonl(2:2).eq.'4') then
++!
++!       F-barES-FEM-T4: U4, the null base tetrahedron of the F-barES-FEM-T4 element
++!
++        call e_c3d_u4(s,sm,ff,stiffness,mass,buckling,rhsi,coriolis)
++!
+       elseif(lakonl(2:4).eq.'S45') then
+         call e_c3d_us45(co,kon,lakonl,p1,p2,omx,bodyfx,nbody,s,sm,
+      &       ff,nelem,nmethod,elcon,nelcon,rhcon,nrhcon,alcon,nalcon,
+--- resultsmech_u.f
++++ resultsmech_u.f
+@@ -68,6 +68,23 @@
+      &        ncmat_,nstate_,stiini,vini,ener,eei,enerini,istep,iinc,
+      &        reltime,calcul_fn,calcul_qa,calcul_cauchy,nener,
+      &        ikin,nal,ne0,thicke,emeini,nelem,ielprop,prop,t0g,t1g)
++      elseif(lakon(nelem)(2:2).eq.'3') then
++!
++!     F-barES-FEM-T4: U3 F-barES-FEM-T4 volumetric edge domain
++!
++         call resultsmech_u3(co,kon,ipkon,lakon,ne,v,elcon,nelcon,
++     &        ielmat,mi,ncmat_,ntmat_,fn,calcul_fn,nal,nelem)
++      elseif(lakon(nelem)(2:2).eq.'2') then
++!
++!     F-barES-FEM-T4: U2 F-barES-FEM-T4 deviatoric edge domain
++!
++         call resultsmech_u2(co,kon,ipkon,lakon,ne,v,elcon,nelcon,
++     &        ielmat,mi,ncmat_,ntmat_,fn,calcul_fn,nal,nelem)
++      elseif(lakon(nelem)(2:2).eq.'4') then
++!
++!     F-barES-FEM-T4: U4 null base tetrahedron of the F-barES-FEM-T4 element
++!
++         call resultsmech_u4(fn,calcul_fn,calcul_qa,mi,nelem)
+       elseif(lakon(nelem)(2:4).eq.'S45') then
+ !
+ !     user element us45 flat shell element with 4 nodes (5dof)
+--- printoutelem.f
++++ printoutelem.f
+@@ -152,7 +152,18 @@
+          write(5,'(i10,1p,1x,e13.6)') nelem,om
+       endif
+ !
+-      if(lakon(nelem)(1:5).eq.'C3D8I') then
++      if(lakon(nelem)(1:1).eq.'U') then
++!
++!        F-barES-FEM-T4: user element. Its label carries ndof in position 7 and the
++!        node count in position 8 (allocation.f). Without this branch the
++!        position-4 tests below all miss -- position 4 of 'U4' is blank --
++!        so nope and mint3d stay 0 and EVOL prints ZERO VOLUME for every
++!        user element. That is silent: the homogenisation then weights the
++!        phase by zero and reports a modulus computed from the rest of the
++!        mesh alone.
++!
++         nope=ichar(lakon(nelem)(8:8))
++      elseif(lakon(nelem)(1:5).eq.'C3D8I') then
+          nope=11
+       elseif(lakon(nelem)(4:4).eq.'2') then
+          nope=20
+@@ -266,7 +277,9 @@
+          xiner(j)=0.d0
+       enddo
+ !
+-      if(lakon(nelem)(4:5).eq.'8R') then
++      if(lakon(nelem)(1:1).eq.'U') then
++         mint3d=1
++      elseif(lakon(nelem)(4:5).eq.'8R') then
+          mint3d=1
+       elseif(lakon(nelem)(4:7).eq.'20RB') then
+          if((lakon(nelem)(8:8).eq.'R').or.
+@@ -305,7 +318,12 @@
+       endif
+ !
+       do jj=1,mint3d
+-         if(lakon(nelem)(4:5).eq.'8R') then
++         if(lakon(nelem)(1:1).eq.'U') then
++            xi=gauss3d4(1,jj)
++            et=gauss3d4(2,jj)
++            ze=gauss3d4(3,jj)
++            weight=weight3d4(jj)
++         elseif(lakon(nelem)(4:5).eq.'8R') then
+             xi=gauss3d1(1,jj)
+             et=gauss3d1(2,jj)
+             ze=gauss3d1(3,jj)
+--- mastruct.c
++++ mastruct.c
+@@ -44,7 +44,7 @@
+ 
+   ITG i,j,k,l,jj,ll,id,index,jdof1,jdof2,idof1,idof2,mpc1,mpc2,id1,id2,
+     ist1,ist2,node1,node2,nmast,ifree,icalcnactdof,
+-    index1,index2,m,node,nzs_,ist,kflag,indexe,nope,*mast1=NULL,
++    index1,index2,m,node,nzs_,ist,kflag,indexe,nope,nring,*mast1=NULL,
+     *irow=NULL,icolumn,nmastboun,mt=mi[1]+1,*next=NULL,nopeold=0,
+     indexeold,identical,jstart,iatleastonenonzero,idof,ndof,*ithread=NULL;
+ 
+@@ -127,15 +127,28 @@
+ 	indexe=ipkon[i];
+ 	if(strcmp1(&lakon[8*i],"U")==0){
+ 	  if((strcmp1(&lakon[8*i+1],"1")==0)||
++	     (strcmp1(&lakon[8*i+1],"2")==0)||
++	     (strcmp1(&lakon[8*i+1],"3")==0)||
++	     (strcmp1(&lakon[8*i+1],"4")==0)||
+ 	     (strcmp1(&lakon[8*i+1],"S45")==0)||
+ 	     (strcmp1(&lakon[8*i+1],"S3")==0)){
+ 	  
+ 	    /* user element
+ 	       number of dofs: 7th entry of label
+-	       number of nodes: 8th entry of label */
++	       number of nodes: 8th entry of label
++
++	       F-barES-FEM-T4: the (unsigned char) cast is load-bearing.  lakon is
++	       char*, char is SIGNED on x86-64, and the node count is one
++	       byte -- so a user element of more than 127 nodes was read
++	       here as a NEGATIVE nope and got no matrix structure at all.
++	       The Fortran side is unaffected (ichar returns 0..255), so
++	       the assembly then asked for entries that had never been
++	       created and add_sm_st_as stopped with 'coefficient should
++	       be 0'.  Found by an F-barES-FEM-T4 c=2 volumetric stencil
++	       of 138 nodes; userelements.f allows up to 255. */
+ 	  
+ 	    ndof=lakon[8*i+6];
+-	    nope=lakon[8*i+7];
++	    nope=(unsigned char)lakon[8*i+7];
+ 	  }else{
+ 
+ 	    /* substructure (superelement) 
+@@ -358,7 +371,10 @@
+       indexe=ipkon[i];
+       if(strcmp1(&lakon[8*i],"U")==0){
+ 	if((strcmp1(&lakon[8*i+1],"1")==0)||
+-	   (strcmp1(&lakon[8*i+1],"S45")==0)||
++	   (strcmp1(&lakon[8*i+1],"2")==0)||
++	     (strcmp1(&lakon[8*i+1],"3")==0)||
++	     (strcmp1(&lakon[8*i+1],"4")==0)||
++	     (strcmp1(&lakon[8*i+1],"S45")==0)||
+ 	   (strcmp1(&lakon[8*i+1],"S3")==0)){
+ 	  
+ 	  /* user element
+@@ -366,7 +382,7 @@
+ 	     number of nodes: 8th entry of label */
+ 	  
+ 	  ndof=lakon[8*i+6];
+-	  nope=lakon[8*i+7];
++	  nope=(unsigned char)lakon[8*i+7];
+ 	}else{
+ 
+ 	  /* substructure (superelement) 
+@@ -409,8 +425,25 @@
+ 	  ndof=3;
+ 	}
+       }else continue;
+-      
+-      for(jj=0;jj<ndof*nope;++jj){
++
++      /* F-barES-FEM-T4 ring x support reduction.  A U3 element's matrix
++         K_vol = (K V_h) tbar^T sbar is rank one, and tbar (the
++         unsmoothed edge divergence) has support only on the edge's
++         own tets -- the RING, written first in the connectivity --
++         while sbar alone carries the wide E A^c support.  So only the
++         first nring rows of the element matrix can be nonzero, and the
++         (support - ring) x (support - ring) block is identically zero.
++         fbares.py encodes nring in lakon(3:3) ('A' = 1 ... 'Z' = 26);
++         not allocating that block is what makes c = 1 buildable on a
++         production cell.  The inner ll loop still spans the whole
++         support: a ring row couples to every support column. */
++      nring=nope;
++      if(strcmp1(&lakon[8*i],"U")==0 && lakon[8*i+1]=='3'){
++	nring=(ITG)(lakon[8*i+2]-'A')+1;
++	if(nring<1||nring>nope) nring=nope;
++      }
++
++      for(jj=0;jj<ndof*nring;++jj){
+ 	
+ 	j=jj/ndof;
+ 	k=jj-ndof*j;
+--- Makefile.inc
++++ Makefile.inc
+@@ -275,6 +275,14 @@
+ e_c3d_se.f \
+ e_c3d_th.f \
+ e_c3d_u1.f \
++	e_c3d_u2.f \
++	e_c3d_u3.f \
++	u2edge.f \
++	u3vol.f \
++	resultsmech_u2.f \
++	resultsmech_u3.f \
++	e_c3d_u4.f \
++	resultsmech_u4.f \
+ e_c3d_us3.f \
+ e_c3d_us45.f \
+ e_c3d_u.f \
+@@ -1029,6 +1037,7 @@
+ expand.c \
+ external.c \
+ feasibledirection.c \
++fbar_lock.c \
+ filterbackwardmain.c \
+ filterforwardmain.c \
+ forparll.c \

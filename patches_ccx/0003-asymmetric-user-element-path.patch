@@ -1,0 +1,344 @@
+Open the asymmetric assembly path to user elements, and stop truncating the
+node count at 127.
+
+U3 (F-barES-FEM-T4 volumetric, patch 0002) has a non-symmetric element
+matrix by construction.  Eq. (17) of Onishi, Iida & Amaya, verbatim:
+
+  "Note that the stretching tensor in this equation, D~, is not the
+   deformation rate of F in Eq. (11) but that of F~ in Eq. (1) due to the
+   adoption of the F-bar method."
+
+The stress comes from the modified gradient, the virtual work is paired with
+the unmodified one, and the result is K_vol = (K V_h) tbar^T sbar with
+tbar != sbar.  Assembling the Galerkin form sbar^T sbar instead measures
+within 0.02% on C1111 but is a different element.
+
+ccx already has a complete asymmetric path -- elements raise nasym,
+mafillsmas assembles, pardiso.c selects mtype=11 -- built for friction
+contact.  Three things stopped U3 from reaching it.
+
+1. nasym WAS RAISED TOO LATE.
+
+Contact sets nasym in gencontelem_*, before the assembly.  An element that
+raises it inside e_c3d_u is already too late: mafillsm walks only the upper
+triangle of the element matrix (do ll=jj,...) into symmetric storage, so a
+U3 that reached it would be silently symmetrised, and mafillsmas would then
+add the full matrix on top of that -- wrong twice over.
+
+  linstatic.c    scan lakon for "U3" and set nasym before mafillsmmain
+  nonlingeo.c    the same, before its own mafillsmmain
+  mafillsm.f     skip U3 when nasym is set, exactly as it already skips
+                 friction springs ('ES...C')
+
+2. THE ASYMMETRIC MECHANICAL LOOP COVERED ONLY CONTACT ELEMENTS.
+
+Friction contact is stock ccx's only asymmetric mechanical contribution, and
+every contact element is generated past ne0, so mafillsmasmain partitions
+the mechanical range over ne0+1..ne -- and with no contact it sets
+nea = ne0+1 > neb = ne0, an EMPTY range.
+
+U3 lives among the ordinary elements.  With the stock bounds mafillsmas
+walked nothing, so the entire volumetric half of the element vanished from
+the matrix while neq and the sparsity stayed correct (mastruct builds those
+from the connectivity, not from the assembly).  The patch test came back
+with interior displacements 200x the applied field: a model held together by
+its deviatoric term alone.
+
+  mafillsmasmain.c  when the model contains a U3, partition the mechanical
+                    range over 1..ne, as the thermal range already is.  The
+                    loop cycles on anything that is neither 'ES' nor 'U3',
+                    so widening it is safe; models without U3 keep the
+                    stock contact partition and its load balance.
+  mafillsmas.f      a U3 branch calling e_c3d_u3 into wide su/smu/ffu, and
+                    sval selecting su or s in the one shared assembly block
+                    (the same arrangement patch 0006 used in mafillsm).
+                    su/smu are ALLOCATABLE and are only sized to 765 when
+                    the thread's range actually contains a U3: 765*765*8 =
+                    4.7 MB each as a fixed local would land in .bss and be
+                    shared across the assembly threads (patch 0007).
+                    Verified: .bss is still 0 in mafillsmas.o.
+
+3. THE NODE COUNT WAS READ AS A SIGNED CHAR.
+
+  mastruct.c, mastructcs.c, arpackcs.c:   nope = lakon[8*i+7];
+
+lakon is char*, char is SIGNED on x86-64, and the node count is one byte.
+A user element of more than 127 nodes was therefore read here as a NEGATIVE
+nope and got no matrix structure at all.  The Fortran side is unaffected
+(ichar returns 0..255), so the assembly went on to ask for entries mastruct
+had never created and add_sm_st_as stopped with 'coefficient should be 0'.
+
+Patch 0001 raised the element matrix to 765 DOF on the argument that 255
+nodes is what lakon(8:8) can encode and userelements.f allows.  That was
+right about the Fortran and wrong about the C: the real ceiling was 127.
+An F-barES-FEM-T4 c=2 stencil of 138 nodes hit it, on the first deck that
+used one.  Fixed with an (unsigned char) cast in all five places.
+
+VERIFICATION
+
+  * patch test and confined compression, c = 0, 1 and 2, agree with the
+    C3D4 control to the last printed digit (patch 0002 has the table).
+    c = 2 exercises a 414-DOF element and is the case that found defect 3.
+  * ccx reports 'Factoring the system of equations using the unsymmetric
+    pardiso solver' for every U3 deck, c = 0 included.
+  * global force balance |sum RF| / max|RF| <= 7.1e-15, so the internal
+    forces recovered by resultsmech_u3 match the matrix that mafillsmas
+    assembled -- the two enter through completely separate paths.
+
+--- mafillsmas.f
++++ mafillsmas.f
+@@ -62,6 +62,17 @@
+      &     mortar,ielprop(*),kscale,iponoeln(*),inoeln(2,*),network,
+      &     neam,nebm,neat,nebt,ikmpc(*),nset,islavquadel(1),irowt1(1),
+      &     jqt1(1),mortartrafoflag,mscalmethod
++!
++!     F-barES-FEM-T4: the user-element path needs its own wide arrays.  s/sm here are
++!     (60,60) and are shared with e_c3d and e_c3d_th, so widening them would
++!     be a stride mismatch -- patch 0006 records that exact failure.  su/smu
++!     are ALLOCATABLE, not fixed locals: 765*765*8 = 4.7 MB each would land
++!     in .bss and be shared across the assembly threads (patch 0007), and
++!     they are only sized up when the model actually contains a U3.
++!
++      integer iuel,iuany
++      real*8 sval,ffu(765)
++      real*8, allocatable :: su(:,:),smu(:,:)
+ !     
+       real*8 co(3,*),xboun(*),coefmpc(*),xforc(*),xload(2,*),p1(3),
+      &     p2(3),ad(*),au(*),bodyf(3),bb(*),xloadold(2,*),value,
+@@ -100,9 +111,47 @@
+ !     mechanical analysis: asymmetric contributions
+ !     only contact friction
+ !     
++!
++!     F-barES-FEM-T4: size the user-element arrays for this thread's element range.
++!
++        iuany=0
++        do i=neam,nebm
++          if(ipkon(i).lt.0) cycle
++          if(lakon(i)(1:2).eq.'U3') then
++            iuany=1
++            exit
++          endif
++        enddo
++        if(iuany.eq.1) then
++          allocate(su(765,765),smu(765,765))
++        else
++          allocate(su(1,1),smu(1,1))
++        endif
++!
+         do i=neam,nebm
+ !     
+           if(ipkon(i).lt.0) cycle
++          iuel=0
++!
++!     F-barES-FEM-T4: U3 -- the F-barES-FEM-T4 volumetric edge domain.
++!
++!     K_vol = (K V_h) tbar^T sbar is rank one and NOT symmetric: eq. (17) of
++!     Onishi, Iida & Amaya pairs the stress from the modified gradient F-bar
++!     with the virtual work of the unmodified F-tilde.  mafillsm skips U3
++!     whenever nasym is set, so THIS loop is where the whole element enters
++!     the matrix -- both triangles, through add_sm_st_as.  mafillsmasmain has
++!     already copied the symmetric assembly into the upper block before this
++!     runs, and U3 contributed nothing to it, so the two do not overlap.
++!
++          if(lakon(i)(1:2).eq.'U3') then
++            iuel=1
++            indexe=ipkon(i)
++            nope=ichar(lakon(i)(8:8))
++            call e_c3d_u3(co,kon,lakon(i),su,smu,ffu,i,elcon,nelcon,
++     &           ielmat,mi,ncmat_,ntmat_,ipkon,lakon,ne,stiffness,
++     &           nasym)
++            go to 1000
++          endif
+           if(lakon(i)(1:2).ne.'ES') cycle
+           indexe=ipkon(i)
+           read(lakon(i)(8:8),'(i1)') nope
+@@ -133,6 +182,8 @@
+      &         set,nset,islavquadel,aut1,irowt1,jqt1,
+      &         mortartrafoflag)
+ !     
++ 1000     continue
++!
+           do jj=1,3*nope
+ !     
+             j=(jj-1)/3+1
+@@ -148,12 +199,20 @@
+ !     
+               node2=kon(indexe+l)
+               jdof2=nactdof(m,node2)
++!
++!     F-barES-FEM-T4: user elements were assembled into the wide su.
++!
++              if(iuel.eq.1) then
++                sval=su(jj,ll)
++              else
++                sval=s(jj,ll)
++              endif
+ !     
+ !     check whether one of the DOF belongs to a SPC or MPC
+ !     
+               if((jdof1.gt.0).and.(jdof2.gt.0)) then
+                 call add_sm_st_as(au,ad,jq,irow,jdof1,jdof2,
+-     &               s(jj,ll),jj,ll,nzs)
++     &               sval,jj,ll,nzs)
+               elseif((jdof1.gt.0).or.(jdof2.gt.0)) then
+ !     
+ !     idof1: genuine DOF
+@@ -174,7 +233,7 @@
+                       do
+                         idof1=nactdof(nodempc(2,index),
+      &                       nodempc(1,index))
+-                        value=-coefmpc(index)*s(jj,ll)/coefmpc(ist)
++                        value=-coefmpc(index)*sval/coefmpc(ist)
+                         if(idof1.gt.0) then
+                           call add_sm_st_as(au,ad,jq,irow,idof1,
+      &                         idof2,value,i0,i0,nzs)
+@@ -200,7 +259,7 @@
+                       do
+                         idof2=nactdof(nodempc(2,index),
+      &                       nodempc(1,index))
+-                        value=-coefmpc(index)*s(jj,ll)/coefmpc(ist)
++                        value=-coefmpc(index)*sval/coefmpc(ist)
+                         if(idof2.gt.0) then
+                           call add_sm_st_as(au,ad,jq,irow,idof1,
+      &                         idof2,value,i0,i0,nzs)
+@@ -248,7 +307,7 @@
+                         idof2=nactdof(nodempc(2,index2),
+      &                       nodempc(1,index2))
+                         value=coefmpc(index1)*coefmpc(index2)*
+-     &                       s(jj,ll)/coefmpc(ist1)/coefmpc(ist2)
++     &                       sval/coefmpc(ist1)/coefmpc(ist2)
+                         if((idof1.gt.0).and.(idof2.gt.0)) then
+                           call add_sm_st_as(au,ad,jq,irow,
+      &                         idof1,idof2,value,i0,i0,nzs)
+@@ -284,7 +343,7 @@
+                         idof2=nactdof(nodempc(2,index2),
+      &                       nodempc(1,index2))
+                         value=coefmpc(index1)*coefmpc(index2)*
+-     &                       s(jj,ll)/coefmpc(ist1)/coefmpc(ist2)
++     &                       sval/coefmpc(ist1)/coefmpc(ist2)
+                         if((idof1.gt.0).and.(idof2.gt.0)) then
+                           call add_sm_st_as(au,ad,jq,irow,
+      &                         idof1,idof2,value,i0,i0,nzs)
+@@ -302,6 +361,7 @@
+             enddo
+           enddo
+         enddo
++        deallocate(su,smu)
+ !     
+       endif
+ !     
+--- mafillsmasmain.c
++++ mafillsmasmain.c
+@@ -145,7 +145,35 @@
+   NNEW(neaparm,ITG,num_cpus);
+   NNEW(nebparm,ITG,num_cpus);
+ 
+-  if(nec>0){
++  /* F-barES-FEM-T4: is there a U3 (F-barES-FEM-T4 volumetric edge domain) in the
++     model?
++
++     Stock ccx has exactly one asymmetric MECHANICAL contribution -- friction
++     contact -- and every contact element is generated past ne0, so the
++     mechanical range below is the contact range and is EMPTY when there is
++     no contact.  U3 is a second such contribution and it lives among the
++     ordinary elements, so with the stock bounds mafillsmas walked nothing
++     and the whole volumetric half of the element silently vanished from the
++     matrix: neq and the sparsity were right (mastruct builds those from the
++     connectivity), the assembly was not, and the patch test came back with
++     interior displacements 200x the applied field.
++
++     When a U3 is present the mechanical range therefore covers all elements,
++     exactly as the thermal range below does.  The loop in mafillsmas cycles
++     on anything that is neither 'ES' nor 'U3', so widening it is safe. */
++
++  ITG iu3=0;
++  for(i=0;i<*ne;i++){
++    if(strcmp1(&lakon[8*i],"U3")==0){iu3=1;break;}
++  }
++
++  if(iu3>0){
++
++    /* U3 elements, anywhere in 1..ne (plus any contact elements) */
++
++    elementcpuload(neaparm,nebparm,ne,ipkon,&num_cpus);
++
++  }else if(nec>0){
+ 
+     /* contact elements */
+     
+--- nonlingeo.c
++++ nonlingeo.c
+@@ -2489,6 +2489,15 @@
+ 	  DOUMEMSET(fnext,0,mt**nk,0.);
+ 	}
+ 
++	/* F-barES-FEM-T4: U3 (F-barES-FEM-T4 volumetric) has a non-symmetric element
++	   matrix by construction (eq. 17).  nasym must be known BEFORE
++	   mafillsm, which walks only the upper triangle of the element
++	   matrix; see the same block in linstatic.c. */
++
++	for(i=0;i<*ne;i++){
++	  if(strcmp1(&lakon[8*i],"U3")==0){nasym=1;break;}
++	}
++
+ 	mafillsmmain(co,nk,kon,ipkon,lakon,ne,nodeboun,ndirboun,xbounact,nboun,
+ 		     ipompc,nodempc,coefmpc,nmpc,nodeforc,ndirforc,xforcact,
+ 		     nforc,nelemload,sideload,xloadact,nload,xbodyact,ipobody,
+--- linstatic.c
++++ linstatic.c
+@@ -431,6 +431,23 @@
+ 	  
+   }
+ 
++  /* F-barES-FEM-T4: U3 (F-barES-FEM-T4 volumetric) has a non-symmetric element matrix
++     by construction -- eq. (17) of Onishi, Iida & Amaya pairs the stress from
++     the modified gradient with the virtual work of the unmodified one.
++
++     nasym has to be known BEFORE mafillsm, not raised by the element inside
++     it.  mafillsm walks only the upper triangle of the element matrix
++     (do ll=jj,...) into symmetric storage, so a U3 that reached it would be
++     silently symmetrised, and mafillsmas would then add the full matrix on
++     top of that -- wrong twice over.  Contact friction has the same
++     requirement and meets it the same way: gencontelem_* sets nasym before
++     the assembly, mafillsm skips the friction elements, and mafillsmas
++     assembles them in full. */
++
++  for(i=0;i<*ne;i++){
++    if(strcmp1(&lakon[8*i],"U3")==0){nasym=1;break;}
++  }
++
+   mafillsmmain(co,nk,kon,ipkon,lakon,ne,nodeboun,ndirboun,xbounact,nboun,
+ 	       ipompc,nodempc,coefmpc,nmpc,nodeforc,ndirforc,xforcact,
+ 	       nforc,nelemload,sideload,xloadact,nload,xbodyact,ipobody,
+--- mastructcs.c
++++ mastructcs.c
+@@ -84,7 +84,7 @@
+ 	   number of nodes: 8th entry of label */
+ 	  
+ 	ndof=lakon[8*i+6];
+-	nope=lakon[8*i+7];
++	nope=(unsigned char)lakon[8*i+7];
+       }else{
+ 
+ 	/* substructure (superelement) 
+@@ -206,7 +206,7 @@
+ 	   number of nodes: 8th entry of label */
+ 	  
+ 	ndof=lakon[8*i+6];
+-	nope=lakon[8*i+7];
++	nope=(unsigned char)lakon[8*i+7];
+       }else{
+ 
+ 	/* substructure (superelement) */
+--- arpackcs.c
++++ arpackcs.c
+@@ -515,7 +515,7 @@
+       iel=-ielset;
+       ielcs[iel]=i;
+       indexe=ipkon[iel];
+-      nope=lakon[8*iel+7];
++      nope=(unsigned char)lakon[8*iel+7];
+       for(i2=0;i2<nope;++i2){
+ 	node=kon[indexe+i2]-1;
+ 	inocs[node]=i;

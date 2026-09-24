@@ -1,0 +1,68 @@
+Opt-in line search for NLGEOM runs (SPAX robustness aid).
+
+ccx already carries a secant line search along the Newton correction, but
+gates it on static penalty contact (`mortar == 1` and contact elements
+present).  This patch opens the same path to any NLGEOM run through
+CCX_LINESEARCH=1: the residual-before (`resold`) is stored under the same
+condition, the line-search block runs, and the factor is bracketed to
+[0.05, 1.0] instead of the contact-tuned *CONTROLS defaults (whose ctrl
+indexing is not worth trusting from C).
+
+STATUS.  It works: the factor is computed and applied (observed 0.05-1.0
+on the MMS cell, ~1.0 on the uniaxial path).  It is NOT required for the
+20-50 % stretch validation -- the exact tangent reaches that on the
+uniaxial problem with the line search off and on identically -- and it is
+not sufficient by itself for the multi-axial MMS boundary field, whose
+31 % corner displacements tangle the mesh at ~1-2 % strain regardless of
+the step damping.  It is kept as an opt-in aid for paths that need a
+bounded trial step, and as the hook for a future arc-length control.
+
+  nonlingeo.c   the two gates, the clamp override, and the comment
+
+--- nonlingeo.c
++++ nonlingeo.c
+@@ -325,6 +325,15 @@
+   i0ref=ctrl[0];irref=ctrl[1];icref=ctrl[3];
+ 
+   sminls=ctrl[28];smaxls=ctrl[29];
++
++  /* SPAX: the generic F-bar line search uses a safe bracket; the
++     *CONTROLS defaults are contact-tuned and the ctrl indexing is not
++     worth trusting here */
++
++  if(getenv("CCX_LINESEARCH")!=NULL){
++    sminls=0.05;
++    smaxls=1.0;
++  }
+   
+   memmpc_=mpcinfo[0];mpcfree=mpcinfo[1];icascade=mpcinfo[2];
+   maxlenmpc=mpcinfo[3];
+@@ -2761,7 +2770,12 @@
+ 
+       /* storing the residuum in resold (for line search) */
+ 
+-      if((*mortar==1)&&(iit!=1)&&(*ne-ne0>0)&&(*nmethod!=4)){
++      /* SPAX: the line search is also available for NLGEOM runs of the
++	 F-bar element (CCX_LINESEARCH=1); contact models keep using it
++	 unconditionally */
++
++      if((((*mortar==1)&&(*ne-ne0>0))||(getenv("CCX_LINESEARCH")!=NULL))
++	 &&(iit!=1)&&(*nmethod!=4)){
+ 	isiz=neq[1];cpypardou(resold,b,&isiz,&num_cpus);
+       }
+ 	  
+@@ -3216,10 +3230,11 @@
+         /* Damping forces --> MPADD */
+       }
+ 
+-      /* line search (only for static surface-to-surface penalty contact)
+-         and not in the first iteration */
++      /* line search: static penalty contact, or any NLGEOM run with
++         CCX_LINESEARCH set (SPAX), and not in the first iteration */
+ 
+-      if((*mortar==1)&&(iit!=1)&&(*ne-ne0>0)&&(*nmethod!=4)){
++      if((((*mortar==1)&&(*ne-ne0>0))||(getenv("CCX_LINESEARCH")!=NULL))
++	 &&(iit!=1)&&(*nmethod!=4)){
+ 
+ 	SFREE(v);SFREE(stx);SFREE(fn);
+       

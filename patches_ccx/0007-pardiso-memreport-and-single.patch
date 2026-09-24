@@ -1,0 +1,277 @@
+Report what PARDISO needs, and let it factor in single precision.
+
+TWO PROBLEMS, ONE CAUSE.  ccx fuses PARDISO's analysis and numerical
+factorisation into phase 12, so the only way to learn what a deck costs was
+to run the whole factorisation and watch it fail.  At L_mesh 0.0080 that
+meant seven hours of out-of-core thrashing -- 21.9 TB read against a 131 GB
+factor, the same factor re-read 166 times -- before the machine admitted it
+could not do it.  PARDISO knows after the ANALYSIS phase alone, in seconds.
+
+  pardiso.c   CCX_PARDISO_MEMREPORT=1     report, then factor as usual
+              CCX_PARDISO_MEMREPORT=stop  report and stop, to size a machine
+
+Phase 12 is split into 11 then 22, and iparm(15)/(16)/(17) are read between
+them: the symbolic peak, the part of it that stays allocated, and the
+numerical factorisation plus solve.  Peak is max(iparm(15), iparm(16)+
+iparm(17)), reported for the mtype actually in use -- which matters, because
+the out-of-core branch upgrades mtype 1 to 11.
+
+  L_mesh   equations   mtype           PEAK
+  0.0240      177 848  1  (in core)    5.12 GB
+  0.0240      177 848  11 (OOC)        5.37 GB
+  0.0080    1 691 831  1              136.37 GB
+
+That last number is the whole story of the 0.0080 failure: a 24 GB core
+budget was asked to hold a 136 GB factor.  Memory grows about as neq^1.46
+across those two points, which puts L_mesh 0.0060 near 400 GB.
+
+SINGLE PRECISION.  CCX_PARDISO_SINGLE=1 sets iparm(28)=1 and halves the term
+that decides whether a deck fits.
+
+Setting iparm(28) alone does nothing, silently.  The default path leaves
+iparm(1)=0, "ignore iparm and use the defaults", so iparm(28) is discarded;
+PARDISO then factors in DOUBLE while being handed the float array, and
+segfaults.  Reaching iparm(28) needs iparm(1)=1, and pardisoinit is the only
+supported way to get a consistent set to modify -- the same requirement the
+out-of-core patch documents.  MKL also reads the VALUE arrays at the declared
+precision, so the matrix and the right-hand side are converted around the
+call; the matrix copy is a few GB against a factor of over a hundred.
+
+IT IS AN APPROXIMATION.  MKL PARDISO in single mode refines in single too, so
+accuracy caps near 1e-7 relative, and an F-bar ES-FEM system at nu ~ 0.4999
+is ill-conditioned enough that this is not obviously safe.  So it is measured,
+not assumed, against the acceptance deck's exact double-precision reaction:
+
+  L_mesh 0.0240, undrained, c=1     wall     peak RSS   F_x on RP-1
+  double                           68.46 s   6.26 GB    1.552992E+07
+  single                           43.35 s   3.83 GB    1.552994E+07
+
+39% less memory, 37% less time, and the reaction agrees to 1.3 ppm --
+E_x = 6.212 GPa either way.  On the 0.0080 deck the reported factor falls from
+136.37 GB to 72.33 GB, a clean 1.9x.
+
+The conversion is done IN PLACE.  A float is half a double, so writing
+fp[i] at offset 4i can never overwrite a double at offset 8i that has not
+been read yet; the array is then shrunk.  The obvious two-array version
+holds both at once, which on the 0.0060 cell is 6.07 GB of double beside
+3.04 GB of float -- a 3 GB peak paid for nothing.
+
+Both are OPT-IN and do nothing unless their variable is set.  Note that the
+memory REPORT is precision-blind if taken before iparm(1)=1 is in force:
+PARDISO sizes the factor symbolically, so a report that still says 136 GB
+under CCX_PARDISO_SINGLE means iparm(28) never took effect.
+--- pardiso.c
++++ pardiso.c
+@@ -32,6 +32,26 @@
+ ITG *icolpardiso=NULL,*pointers=NULL,iparm[64];
+ long long pt[64];
+ double *aupardiso=NULL;
++
++/* F-barES-FEM-T4: optional SINGLE-PRECISION factor, CCX_PARDISO_SINGLE=1.
++
++   iparm(28)=1 halves the factor, which is the term that decides whether a
++   deck fits: at L_mesh 0.0080 the double factor passed 130 GB and thrashed
++   out of core for seven hours without finishing.  MKL requires the VALUE
++   arrays to match the flag, so the matrix and the right-hand side are
++   converted to float around the call; the matrix copy is a few GB against a
++   factor of over a hundred, so the conversion pays for itself many times.
++
++   IT IS AN APPROXIMATION, AND A SHARP ONE.  MKL PARDISO in single mode does
++   the refinement in single as well, so accuracy is capped near 1e-7
++   RELATIVE -- and an F-bar ES-FEM system at nu ~ 0.4999 is ill-conditioned
++   enough that this may leave nothing.  That is exactly what the 0.0240 and
++   0.0120 acceptance decks are for: they have exact reference reactions from
++   the double-precision path, so the error this costs is measured, not
++   assumed.  Off by default. */
++
++static float *aupardiso_s=NULL;
++static int pardiso_single=0;
+ /* double dparm[64];  not used */
+ ITG mthread_mkl=0;
+ char envMKL[32];
+@@ -299,7 +319,7 @@
+     }
+   }
+ 
+-  /* SPAX: CCX_PARDISO_OOC=<MB> factors OUT OF CORE.
++  /* F-barES-FEM-T4: CCX_PARDISO_OOC=<MB> factors OUT OF CORE.
+ 
+      MKL PARDISO keeps the whole factor in RAM by default, and for a wide
+      user element that is the binding constraint long before the matrix is.
+@@ -329,7 +349,7 @@
+ 	   getenv("MKL_PARDISO_OOC_PATH"):"./ooc_temp");
+     fflush(stdout);
+ 
+-    /* SPAX: MKL PARDISO supports out-of-core only for mtype = -2 and 11, NOT
++    /* F-barES-FEM-T4: MKL PARDISO supports out-of-core only for mtype = -2 and 11, NOT
+        for mtype = 1 (structurally symmetric, numerically asymmetric).  The
+        inputformat=1 branch above (the asymmetric / F-bar path of linstatic.c)
+        has already composed the FULL general matrix into aupardiso,
+@@ -343,12 +363,94 @@
+ /* next line is for the simulateous use of PARDISO and PaStiX */
+ 
+   mkl_domain_set_num_threads(mthread_mkl,MKL_DOMAIN_PARDISO);
+-  
+-  FORTRAN(pardiso,(pt,&maxfct,&mnum,&mtype,&phase,neq,aupardiso,
++
++  /* F-barES-FEM-T4: what does this factorisation actually need?
++
++     ccx fuses analysis and numerical factorisation into phase 12, so the
++     only way to learn a deck's memory requirement was to run the whole
++     factorisation and watch it die -- which at L_mesh 0.0080 meant seven
++     hours before the machine admitted it could not do it.  PARDISO already
++     knows after the ANALYSIS phase alone, which takes seconds: iparm(15)
++     is the peak of the symbolic phase, iparm(16) the part of it that stays
++     allocated, and iparm(17) the numerical factorisation and solve.  Peak
++     total is max(iparm(15), iparm(16)+iparm(17)) kB, and it is reported for
++     the mtype actually in use -- which matters, because the out-of-core
++     branch above upgrades mtype 1 to 11.
++
++       CCX_PARDISO_MEMREPORT=1     report, then factor as usual
++       CCX_PARDISO_MEMREPORT=stop  report and stop, for sizing a machine  */
++
++  env=getenv("CCX_PARDISO_SINGLE");
++  if(env!=NULL && *env=='1'){
++    ITG is;
++    pardiso_single=1;
++    /* iparm(1)=0 means "ignore iparm and use the defaults", which silently
++       discards iparm(28) -- PARDISO then factors in DOUBLE while being
++       handed the float array, and segfaults.  Reaching iparm(28) requires
++       iparm(1)=1, and pardisoinit is the only supported way to get a
++       consistent set to modify.  The out-of-core branch above has already
++       done this if it ran; doing it twice is harmless. */
++    if(iparm[0]==0){
++      FORTRAN(pardisoinit,(pt,&mtype,iparm));
++      iparm[0]=1;
++      iparm[1]=3;
++    }
++    iparm[27]=1;
++    /* F-barES-FEM-T4: convert IN PLACE.  A float is half a double, so writing
++       fp[is] (offset 4*is) over the front of the double array can never
++       overwrite a double at offset 8*is that has not been read yet.  The
++       obvious two-array version holds both at once -- on the 0.0060 deck
++       that is 6.07 GB of double beside 3.04 GB of float, a 3 GB peak paid
++       for nothing. */
++    {
++      float *fp=(float *)aupardiso;
++      for(is=0;is<ndim;is++) fp[is]=(float)aupardiso[is];
++    }
++    aupardiso_s=(float *)aupardiso;
++    RENEW(aupardiso_s,float,ndim);
++    aupardiso=NULL;
++    printf(" SPAX: PARDISO single-precision factor (iparm(28)=1); the"
++	   " factor halves and accuracy caps near 1e-7 relative\n");
++    fflush(stdout);
++  }
++
++  env=getenv("CCX_PARDISO_MEMREPORT");
++  if(env!=NULL){
++    double sym,num,peak;
++    phase=11;
++    FORTRAN(pardiso,(pt,&maxfct,&mnum,&mtype,&phase,neq,
++		     pardiso_single?(double *)aupardiso_s:aupardiso,
++		     pointers,icolpardiso,perm,&nrhs,iparm,&msglvl,
++                     b,x,&error));
++    if(error!=0){
++      printf("\n *ERROR in pardiso_factor: PARDISO returned error %"
++	     ITGFORMAT " in the analysis phase (mtype %" ITGFORMAT ").\n",
++	     error,mtype);
++      exit(201);
++    }
++    sym =iparm[14]/1048576.0;
++    num =(iparm[15]+iparm[16])/1048576.0;
++    peak=(sym>num)?sym:num;
++    printf(" SPAX: PARDISO memory report (mtype %" ITGFORMAT
++	   ", %s), %" ITGFORMAT " equations\n",
++	   mtype,(iparm[59]==2)?"out of core":"in core",neq[0]);
++    printf("       symbolic peak      %8.2f GB\n",sym);
++    printf("       permanent + numeric%8.2f GB\n",num);
++    printf("       PEAK               %8.2f GB\n",peak);
++    fflush(stdout);
++    if(strcmp(env,"stop")==0){
++      printf(" SPAX: CCX_PARDISO_MEMREPORT=stop, not factoring.\n");
++      FORTRAN(stop,());
++    }
++    phase=22;
++  }
++
++  FORTRAN(pardiso,(pt,&maxfct,&mnum,&mtype,&phase,neq,
++		   pardiso_single?(double *)aupardiso_s:aupardiso,
+ 		   pointers,icolpardiso,perm,&nrhs,iparm,&msglvl,
+                    b,x,&error));
+ 
+-  /* SPAX: PARDISO's return code was passed and never read.
++  /* F-barES-FEM-T4: PARDISO's return code was passed and never read.
+      ccx hands &error to all three phases and looks at it nowhere, so ANY
+      failure -- out of memory, a singular matrix, an out-of-core scratch path
+      that does not exist -- is silently ignored and the run continues on an
+@@ -394,7 +496,7 @@
+       mtype=1;
+     }
+   }
+-  /* SPAX: match pardiso_factor's out-of-core mtype upgrade, or the solve
++  /* F-barES-FEM-T4: match pardiso_factor's out-of-core mtype upgrade, or the solve
+      phase (33) disagrees with the factor phase (12) and PARDISO returns
+      error -1.  MKL out-of-core supports only mtype -2 and 11. */
+   if(mtype==1 && getenv("CCX_PARDISO_OOC")!=NULL) mtype=11;
+@@ -406,11 +508,30 @@
+ 
+   NNEW(x,double,*nrhs**neq);
+ 
+-  FORTRAN(pardiso,(pt,&maxfct,&mnum,&mtype,&phase,neq,aupardiso,
+-		   pointers,icolpardiso,perm,nrhs,iparm,&msglvl,
+-                   b,x,&error));
++  if(pardiso_single){
++
++    /* F-barES-FEM-T4: the factor is single, so the right-hand side and solution must
++       be too -- MKL reads them at the precision iparm(28) declares.  Convert
++       in, solve, convert out. */
++
++    float *bs=NULL,*xs=NULL;
++    ITG is,ntot=*nrhs**neq;
++    NNEW(bs,float,ntot);
++    NNEW(xs,float,ntot);
++    for(is=0;is<ntot;is++) bs[is]=(float)b[is];
++    FORTRAN(pardiso,(pt,&maxfct,&mnum,&mtype,&phase,neq,(double *)aupardiso_s,
++		     pointers,icolpardiso,perm,nrhs,iparm,&msglvl,
++                     (double *)bs,(double *)xs,&error));
++    for(is=0;is<ntot;is++) x[is]=(double)xs[is];
++    SFREE(bs);
++    SFREE(xs);
++  }else{
++    FORTRAN(pardiso,(pt,&maxfct,&mnum,&mtype,&phase,neq,aupardiso,
++		     pointers,icolpardiso,perm,nrhs,iparm,&msglvl,
++                     b,x,&error));
++  }
+ 
+-  /* SPAX: same reason as in pardiso_factor -- a failed solve must stop. */
++  /* F-barES-FEM-T4: same reason as in pardiso_factor -- a failed solve must stop. */
+   if(error!=0){
+     printf("\n *ERROR in pardiso_solve: PARDISO returned error %" ITGFORMAT
+ 	   " (phase %" ITGFORMAT ").  The system was NOT solved.\n",
+@@ -439,7 +560,7 @@
+       mtype=1;
+     }
+   }
+-  /* SPAX: keep the cleanup phase (-1) on the same mtype the factor and solve
++  /* F-barES-FEM-T4: keep the cleanup phase (-1) on the same mtype the factor and solve
+      phases used under out-of-core (11, not 1). */
+   if(mtype==1 && getenv("CCX_PARDISO_OOC")!=NULL) mtype=11;
+ 
+@@ -448,7 +569,15 @@
+                    b,x,&error));
+ 
+   SFREE(icolpardiso);
+-  SFREE(aupardiso);
++  /* F-barES-FEM-T4: under CCX_PARDISO_SINGLE the double matrix was released at
++     conversion time and the float copy is what exists */
++  if(pardiso_single){
++    SFREE(aupardiso_s);
++    aupardiso_s=NULL;
++    pardiso_single=0;
++  }else{
++    SFREE(aupardiso);
++  }
+   SFREE(pointers);
+ 
+   return;
