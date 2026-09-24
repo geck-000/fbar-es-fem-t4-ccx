@@ -95,7 +95,7 @@ elements are U2/U3 smoothing domains that carry no stress at all -- that is
 +    if(thr<=0.0) thr=1.0e30; else thr*=1048576.0;
 +  }
 +  if((double)bytes>=thr){
-+    printf(" SPAX alloc %-8s %-14s %8.3f GB   %s:%d\n",
++    printf(" F-barES-FEM-T4 alloc %-8s %-14s %8.3f GB   %s:%d\n",
 +           what,ptr_name,bytes/1073741824.0,file,line);
 +    fflush(stdout);
 +  }
@@ -134,7 +134,7 @@ elements are U2/U3 smoothing domains that carry no stress at all -- that is
 +    if(thr<=0.0) thr=1.0e30; else thr*=1048576.0;
 +  }
 +  if((double)bytes>=thr){
-+    printf(" SPAX alloc %-8s %-14s %8.3f GB   %s:%d\n",
++    printf(" F-barES-FEM-T4 alloc %-8s %-14s %8.3f GB   %s:%d\n",
 +           what,ptr_name,bytes/1073741824.0,file,line);
 +    fflush(stdout);
 +  }

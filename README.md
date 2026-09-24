@@ -26,11 +26,18 @@ fbar-es-fem-t4-ccx/
 │   ├── *.f, fbar_lock.c   U2/U3/U4 user elements
 │   ├── fbares.py          C3D4 deck -> F-barES deck
 │   └── tests/             verification and mesh-convergence checks
-├── patches_ccx/           12 patches for a stock CalculiX 2.23 tree
-└── validation_ccx/        CalculiX vs stored Abaqus results
-    ├── params/            cell specifications
-    └── results/           Abaqus reference tables
+└── patches_ccx/           12 patches for a stock CalculiX 2.23 tree
 ```
+
+## Dependencies
+
+Building the element needs a CalculiX 2.23 source tree with `gcc`, `gfortran`
+and `make`. The non-symmetric tangent is factored through PARDISO's
+general-matrix path (`mtype = 11`), so CalculiX must be built with its PARDISO
+solver (Intel MKL). The Python checks need Python 3 with numpy and scipy,
+`verify_nltan.py` compiles a driver with `gfortran`, and the shell drivers need
+`bash` and `git` (the patches apply with `git apply`). Abaqus is optional: only
+the `C3D4H` side of the mesh-convergence comparison uses it.
 
 ## Build and run
 
@@ -40,27 +47,11 @@ them to `SCCXF`/`SCCXC` in `Makefile.inc`, apply the patches in `patches_ccx/`
 itself. Then `elements_ccx/fbares.py` rewrites a plain `C3D4` deck as
 F-barES-FEM-T4, with `elements_ccx/tests/slabconv.sh` as an end-to-end driver.
 The `*USER ELEMENT` interface caps connectivity at 255 nodes, so `c = 1` is
-deliverable and `c >= 2` needs a direct global-assembly pass; the
-non-symmetric tangent needs PARDISO's general-matrix path (`mtype = 11`). Read
-results from displacements and reactions, since no element in an F-bar deck
-carries stress.
+deliverable and `c >= 2` needs a direct global-assembly pass. Read results from
+displacements and reactions, since no element in an F-bar deck carries stress.
 
 ## Tests
 
-Python 3 with numpy and scipy; `verify_nltan.py` also needs gfortran.
 `elements_ccx/tests/README.md` lists the checks: the operator and finite-strain
 checks, the Fortran chain against `S = E A^c`, the deck generator, and the
 mesh-convergence cell against the Abaqus `C3D4H` tables.
-
-## Validation
-
-`validation_ccx/` compares CalculiX against stored Abaqus results on real
-cells, driving [SpaX](https://github.com/geck-000/SpaX) to generate and solve
-the decks. Point `SPAX_ROOT` at a checkout:
-
-```bash
-SPAX_ROOT=/path/to/SpaX  SPAX_CCX=/path/to/ccx  bash validation_ccx/validate_ccx.sh
-```
-
-The decks and reference tables travel with the folder, so nothing outside the
-two repositories is needed.

@@ -518,7 +518,7 @@ builds: 187 006 594 nonzeros at 0.0080, 4.06e8 at 0.0060.
 +  msd_on=0;
 +
 +  if((e=getenv("CCX_MASTRUCT_DEDUP"))!=NULL&&strcmp(e,"legacy")==0){
-+    printf(" SPAX: CCX_MASTRUCT_DEDUP=legacy, using the original linked list\n");
++    printf(" F-barES-FEM-T4: CCX_MASTRUCT_DEDUP=legacy, using the original linked list\n");
 +    return;
 +  }
 +
@@ -588,7 +588,7 @@ builds: 187 006 594 nonzeros at 0.0080, 4.06e8 at 0.0060.
 +  }
 +  while(col<msd_neq){jq[col+1]=(ITG)(p+1);col++;}
 +
-+  printf(" SPAX: structure dedup: %.4e pairs offered, %zu distinct"
++  printf(" F-barES-FEM-T4: structure dedup: %.4e pairs offered, %zu distinct"
 +         " (%.1fx), %zu spill(s), %.1f s, peak RSS %.2f GB\n",
 +         (double)msd_nadd,n,msd_nadd?(double)msd_nadd/(double)(n?n:1):0.0,
 +         msd_spills,msd_now()-msd_t0,msd_hwm()/1048576.0);

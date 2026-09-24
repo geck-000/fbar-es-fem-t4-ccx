@@ -1,4 +1,4 @@
-Opt-in line search for NLGEOM runs (SPAX robustness aid).
+Opt-in line search for NLGEOM runs (F-barES-FEM-T4 robustness aid).
 
 ccx already carries a secant line search along the Newton correction, but
 gates it on static penalty contact (`mortar == 1` and contact elements
@@ -26,7 +26,7 @@ bounded trial step, and as the hook for a future arc-length control.
  
    sminls=ctrl[28];smaxls=ctrl[29];
 +
-+  /* SPAX: the generic F-bar line search uses a safe bracket; the
++  /* F-barES-FEM-T4: the generic F-bar line search uses a safe bracket; the
 +     *CONTROLS defaults are contact-tuned and the ctrl indexing is not
 +     worth trusting here */
 +
@@ -42,7 +42,7 @@ bounded trial step, and as the hook for a future arc-length control.
        /* storing the residuum in resold (for line search) */
  
 -      if((*mortar==1)&&(iit!=1)&&(*ne-ne0>0)&&(*nmethod!=4)){
-+      /* SPAX: the line search is also available for NLGEOM runs of the
++      /* F-barES-FEM-T4: the line search is also available for NLGEOM runs of the
 +	 F-bar element (CCX_LINESEARCH=1); contact models keep using it
 +	 unconditionally */
 +
@@ -58,7 +58,7 @@ bounded trial step, and as the hook for a future arc-length control.
 -      /* line search (only for static surface-to-surface penalty contact)
 -         and not in the first iteration */
 +      /* line search: static penalty contact, or any NLGEOM run with
-+         CCX_LINESEARCH set (SPAX), and not in the first iteration */
++         CCX_LINESEARCH set (F-barES-FEM-T4), and not in the first iteration */
  
 -      if((*mortar==1)&&(iit!=1)&&(*ne-ne0>0)&&(*nmethod!=4)){
 +      if((((*mortar==1)&&(*ne-ne0>0))||(getenv("CCX_LINESEARCH")!=NULL))

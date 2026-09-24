@@ -93,7 +93,7 @@ under CCX_PARDISO_SINGLE means iparm(28) never took effect.
      }
    }
  
--  /* SPAX: CCX_PARDISO_OOC=<MB> factors OUT OF CORE.
+-  /* F-barES-FEM-T4: CCX_PARDISO_OOC=<MB> factors OUT OF CORE.
 +  /* F-barES-FEM-T4: CCX_PARDISO_OOC=<MB> factors OUT OF CORE.
  
       MKL PARDISO keeps the whole factor in RAM by default, and for a wide
@@ -102,7 +102,7 @@ under CCX_PARDISO_SINGLE means iparm(28) never took effect.
  	   getenv("MKL_PARDISO_OOC_PATH"):"./ooc_temp");
      fflush(stdout);
  
--    /* SPAX: MKL PARDISO supports out-of-core only for mtype = -2 and 11, NOT
+-    /* F-barES-FEM-T4: MKL PARDISO supports out-of-core only for mtype = -2 and 11, NOT
 +    /* F-barES-FEM-T4: MKL PARDISO supports out-of-core only for mtype = -2 and 11, NOT
         for mtype = 1 (structurally symmetric, numerically asymmetric).  The
         inputformat=1 branch above (the asymmetric / F-bar path of linstatic.c)
@@ -159,7 +159,7 @@ under CCX_PARDISO_SINGLE means iparm(28) never took effect.
 +    aupardiso_s=(float *)aupardiso;
 +    RENEW(aupardiso_s,float,ndim);
 +    aupardiso=NULL;
-+    printf(" SPAX: PARDISO single-precision factor (iparm(28)=1); the"
++    printf(" F-barES-FEM-T4: PARDISO single-precision factor (iparm(28)=1); the"
 +	   " factor halves and accuracy caps near 1e-7 relative\n");
 +    fflush(stdout);
 +  }
@@ -181,7 +181,7 @@ under CCX_PARDISO_SINGLE means iparm(28) never took effect.
 +    sym =iparm[14]/1048576.0;
 +    num =(iparm[15]+iparm[16])/1048576.0;
 +    peak=(sym>num)?sym:num;
-+    printf(" SPAX: PARDISO memory report (mtype %" ITGFORMAT
++    printf(" F-barES-FEM-T4: PARDISO memory report (mtype %" ITGFORMAT
 +	   ", %s), %" ITGFORMAT " equations\n",
 +	   mtype,(iparm[59]==2)?"out of core":"in core",neq[0]);
 +    printf("       symbolic peak      %8.2f GB\n",sym);
@@ -189,7 +189,7 @@ under CCX_PARDISO_SINGLE means iparm(28) never took effect.
 +    printf("       PEAK               %8.2f GB\n",peak);
 +    fflush(stdout);
 +    if(strcmp(env,"stop")==0){
-+      printf(" SPAX: CCX_PARDISO_MEMREPORT=stop, not factoring.\n");
++      printf(" F-barES-FEM-T4: CCX_PARDISO_MEMREPORT=stop, not factoring.\n");
 +      FORTRAN(stop,());
 +    }
 +    phase=22;
@@ -200,7 +200,7 @@ under CCX_PARDISO_SINGLE means iparm(28) never took effect.
  		   pointers,icolpardiso,perm,&nrhs,iparm,&msglvl,
                     b,x,&error));
  
--  /* SPAX: PARDISO's return code was passed and never read.
+-  /* F-barES-FEM-T4: PARDISO's return code was passed and never read.
 +  /* F-barES-FEM-T4: PARDISO's return code was passed and never read.
       ccx hands &error to all three phases and looks at it nowhere, so ANY
       failure -- out of memory, a singular matrix, an out-of-core scratch path
@@ -209,7 +209,7 @@ under CCX_PARDISO_SINGLE means iparm(28) never took effect.
        mtype=1;
      }
    }
--  /* SPAX: match pardiso_factor's out-of-core mtype upgrade, or the solve
+-  /* F-barES-FEM-T4: match pardiso_factor's out-of-core mtype upgrade, or the solve
 +  /* F-barES-FEM-T4: match pardiso_factor's out-of-core mtype upgrade, or the solve
       phase (33) disagrees with the factor phase (12) and PARDISO returns
       error -1.  MKL out-of-core supports only mtype -2 and 11. */
@@ -244,7 +244,7 @@ under CCX_PARDISO_SINGLE means iparm(28) never took effect.
 +                     b,x,&error));
 +  }
  
--  /* SPAX: same reason as in pardiso_factor -- a failed solve must stop. */
+-  /* F-barES-FEM-T4: same reason as in pardiso_factor -- a failed solve must stop. */
 +  /* F-barES-FEM-T4: same reason as in pardiso_factor -- a failed solve must stop. */
    if(error!=0){
      printf("\n *ERROR in pardiso_solve: PARDISO returned error %" ITGFORMAT
@@ -253,7 +253,7 @@ under CCX_PARDISO_SINGLE means iparm(28) never took effect.
        mtype=1;
      }
    }
--  /* SPAX: keep the cleanup phase (-1) on the same mtype the factor and solve
+-  /* F-barES-FEM-T4: keep the cleanup phase (-1) on the same mtype the factor and solve
 +  /* F-barES-FEM-T4: keep the cleanup phase (-1) on the same mtype the factor and solve
       phases used under out-of-core (11, not 1). */
    if(mtype==1 && getenv("CCX_PARDISO_OOC")!=NULL) mtype=11;

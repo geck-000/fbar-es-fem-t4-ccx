@@ -74,7 +74,7 @@ The element sources themselves (u3nltan.f, e_c3d_u3.f) live in
  !
              if((lakon(i)(1:2).eq.'U3').and.(nasym.eq.1)) cycle
 +
-+!     SPAX: under NLGEOM the U3 element carries the FULL consistent tangent
++!     F-barES-FEM-T4: under NLGEOM the U3 element carries the FULL consistent tangent
 +!     of the finite-strain force, so U2's small-strain deviatoric stiffness
 +!     must not be added on top of it -- the force already carries both
 +!     halves (see resultsmech_u2).

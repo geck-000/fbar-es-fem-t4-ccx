@@ -25,21 +25,21 @@ u3nl.f to SCCXF as this patch does.
 --- resultsmech_u.f
 +++ resultsmech_u.f
 @@ -73,13 +73,13 @@
- !     SPAX: U3 F-barES-FEM-T4 volumetric edge domain
+ !     F-barES-FEM-T4: U3 F-barES-FEM-T4 volumetric edge domain
  !
           call resultsmech_u3(co,kon,ipkon,lakon,ne,v,elcon,nelcon,
 -     &        ielmat,mi,ncmat_,ntmat_,fn,calcul_fn,nal,nelem)
 +     &        ielmat,mi,ncmat_,ntmat_,fn,calcul_fn,nal,nelem,iperturb)
        elseif(lakon(nelem)(2:2).eq.'2') then
  !
- !     SPAX: U2 F-barES-FEM-T4 deviatoric edge domain
+ !     F-barES-FEM-T4: U2 F-barES-FEM-T4 deviatoric edge domain
  !
           call resultsmech_u2(co,kon,ipkon,lakon,ne,v,elcon,nelcon,
 -     &        ielmat,mi,ncmat_,ntmat_,fn,calcul_fn,nal,nelem)
 +     &        ielmat,mi,ncmat_,ntmat_,fn,calcul_fn,nal,nelem,iperturb)
        elseif(lakon(nelem)(2:2).eq.'4') then
  !
- !     SPAX: U4 null base tetrahedron of the F-barES-FEM-T4 element
+ !     F-barES-FEM-T4: U4 null base tetrahedron of the F-barES-FEM-T4 element
 --- Makefile.inc
 +++ Makefile.inc
 @@ -279,6 +279,7 @@
