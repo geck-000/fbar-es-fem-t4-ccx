@@ -38,9 +38,9 @@ treatment and a cyclic smoothing whose count `c` is the free parameter.
 
 ## Build
 
-1. Copy the `*.f` and `*.c` sources into `<ccx_2.23>/src` and add them to
-   `SCCXF`/`SCCXC` in `Makefile.inc`.
-2. Apply the patches in `../patches_ccx/` (see its `README.md`).
+1. Copy the `*.f` and `*.c` sources into `<ccx_2.23>/src`.
+2. Apply the patches in `../patches_ccx/` (see its `README.md`); the series
+   adds the sources to `SCCXF`/`SCCXC`.
 3. Rebuild.
 
 Two limits follow from the stencil widths: `*USER ELEMENT` caps connectivity at

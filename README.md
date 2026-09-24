@@ -40,10 +40,10 @@ solver (Intel MKL). The Python checks need Python 3 with numpy and scipy,
 
 ## Build and run
 
-Copy the sources from `elements_ccx/` into the CalculiX `src/` directory, add
-them to `SCCXF`/`SCCXC` in `Makefile.inc`, apply the patches in `patches_ccx/`
-(see its README), and rebuild; patches `0001` to `0005` carry the element
-itself. Then `elements_ccx/fbares.py` rewrites a plain `C3D4` deck as
+Copy the sources from `elements_ccx/` into the CalculiX `src/` directory, apply
+the patches in `patches_ccx/` (see its README), and rebuild. The series adds
+the sources to `SCCXF`/`SCCXC` itself; patches `0001` to `0005` carry the
+element. Then `elements_ccx/fbares.py` rewrites a plain `C3D4` deck as
 F-barES-FEM-T4, with `elements_ccx/tests/meshconv.py` as the mesh-convergence
 driver.
 The `*USER ELEMENT` interface caps connectivity at 255 nodes, so `c = 1` is

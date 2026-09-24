@@ -24,5 +24,6 @@ make -j8
 | `0011-finite-strain-tangent.patch` | stage 2: builds `u3nltan.f`, the consistent tangent of that force, verified against the prototype to 6e-15 |
 | `0012-opt-in-line-search.patch` | opens the secant line search to any NLGEOM run through `CCX_LINESEARCH=1`, factor bracketed to [0.05, 1.0]; a robustness aid, not required for the 20 to 50% uniaxial stretch |
 
-The element sources live in `../elements_ccx/`; add them to `SCCXF`/`SCCXC` in
-`Makefile.inc`. See `../elements_ccx/README.md`.
+The element sources live in `../elements_ccx/`; copy them into `src/` before
+building. The series adds them to `SCCXF`/`SCCXC` itself (patches 0002, 0010
+and 0011). See `../elements_ccx/README.md`.
