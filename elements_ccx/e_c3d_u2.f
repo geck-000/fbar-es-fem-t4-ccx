@@ -23,8 +23,7 @@
 !     konl(1) and konl(2) ARE THE TWO EDGE NODES.  The rest is the other nodes
 !     of the tets sharing that edge; u2edge finds the tets themselves.  On the
 !     soft phase of a production mesh this ring is 6.3 nodes on average and
-!     14 at
-!     worst, so unlike U3 it sits far inside the element-matrix capacity.
+!     14 at worst, so unlike U3 it sits far inside the element capacity.
 !
 !     Keep U2 out of any *EL PRINT set: it has no material volume of its own,
 !     and printoutelem.f would pick a shape function from its node count.
@@ -45,11 +44,10 @@
 !
       nope=ichar(lakonl(8:8))
 !
-!     Hard capacity guard, as in e_c3d_u6: nope follows mesh valence, and
-!     overrunning s used to corrupt the assembly silently rather than stop.
-!     255 nodes (765 DOF) is the encoding limit -- lakon(8:8) is one byte and
-!     userelements.f:83 already refuses more -- so a ring that trips this
-!     cannot be a ccx user element at all.
+!     Hard capacity guard: nope follows mesh valence, and overrunning s
+!     would corrupt the assembly silently.  255 nodes (765 DOF) is the
+!     encoding limit (lakon(8:8) is one byte, and userelements.f:83 already
+!     refuses more), so a ring that trips this cannot be a user element.
 !
       if(nope.gt.255) then
         write(*,*) '*ERROR in e_c3d_u2: edge element ',nelem
@@ -62,7 +60,6 @@
       do i=1,nope
         konl(i)=kon(indexe+i)
       enddo
-!
 !
 !     Zero the ACTUAL extent, and zero sm too: the caller allocates s/sm/ff
 !     once and never re-zeroes them between elements, and U2 is static-only
@@ -96,8 +93,8 @@
         call exit(201)
       endif
 !
-!     2 mu dev(eps):dev(eps) over the smoothing domain.  Identical in form to
-!     e_c3d_u5 with vol -> vh and g -> gt:
+!     2 mu dev(eps):dev(eps) over the smoothing domain, same form as the
+!     standard linear-tet stiffness with vol -> vh and g -> gt:
 !         eps:eps = (delta_cd (g_i.g_j) + g_i[d] g_j[c])/2
 !         div div = g_i[c] g_j[d]
 !

@@ -24,11 +24,8 @@
 !     eq. (17) pairs the stress with the stretching of Ftilde, not of Fbar:
 !     the volumetric operator is tbar^T (K V_h) sbar and is NOT symmetric.
 !
-!     Eq. (10) of the paper states outright that the whole chain is a weighted
-!     mean of the RAW element J, which is what makes it this single linear
-!     operator.  The input to eq. (6) carries no tilde -- read that off the
-!     typeset equations, not a text extraction; pdftotext drops every tilde and
-!     bar in this paper and the diacritics carry the meaning.
+!     Eq. (10) states that the chain is a weighted mean of the RAW element J,
+!     which is what makes it this single linear operator.
 !
 !     STENCIL WIDTH.  Measured on the soft phase of a production mesh
 !     (117437 tets, 36323 nodes, 184572 edges):

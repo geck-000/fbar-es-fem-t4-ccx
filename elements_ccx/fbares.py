@@ -49,7 +49,6 @@ matrix widened from 150 to 520 DOF along the whole e_c3d_u* path.
 """
 import argparse
 import os
-import sys
 from array import array
 from collections import defaultdict
 
@@ -129,7 +128,9 @@ def final_structure(u2, u3, tcn, symmetric=False):
     nn = 1
     for a in (supp_n, ring_n):
         if a:
-            nn = max(nn, max(int(x.max()) for x in a if x.size))
+            vals = [int(x.max()) for x in a if x.size]
+            if vals:
+                nn = max([nn] + vals)
     if T.size:
         nn = max(nn, int(T.max()))
     nn += 1
@@ -343,7 +344,7 @@ def main():
                     help='element set to treat; repeat for more than one. '
                          'Default: every C3D4 set in the deck.')
     ap.add_argument('--cycles', type=int,
-                    default=int(os.environ.get('CCX_FBAR_C', 1)),
+                    default=int(os.environ.get('CCX_FBAR_C', '1')),
                     help='c, the number of cyclic smoothings of J, eq. (6)-(7)')
     ap.add_argument('--solver', default=os.environ.get('FBAR_SOLVER',
                                                        'PARDISO'))
@@ -494,7 +495,7 @@ def main():
             nb = int(kb[h])
             rl = ridx[rptr[h]:rptr[h + 1]]
             sl = sidx[sptr[h]:sptr[h + 1]]
-            rest = sorted(int(x) for x in rl if x != na and x != nb)
+            rest = sorted(int(x) for x in rl if x not in (na, nb))
             push(('U2', es, len(rl), len(rl)), [na, nb] + rest)
             ring = set(int(x) for x in rl)
             supp = set(int(x) for x in sl)
@@ -567,11 +568,12 @@ def main():
     # two streaming passes over the source rather than holding the whole deck
     # as a list of lines: on the 0.0060 cell that list is ~0.7 GB
     drop, sawnp = False, any(
-        iskw(l) and l.upper().replace(' ', '').startswith(('*NODEPRINT',
-                                                           '*NODEFILE'))
-        for l in open(a.src))
+        iskw(lab) and lab.upper().replace(' ', '').startswith(
+            ('*NODEPRINT', '*NODEFILE'))
+        for lab in open(a.src))
     eid = maxel
-    for ln in _rstrip_lines(a.src):
+    for raw in _rstrip_lines(a.src):
+        ln = raw
         if not iskw(ln):
             # a data line of a dropped block goes with it
             if drop:

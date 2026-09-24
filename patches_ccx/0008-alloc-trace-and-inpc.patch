@@ -1,59 +1,24 @@
+
 Stop holding the deck twice, and say which allocation is about to fail.
 
-TWO THINGS, FOUND THE SAME WAY.  A deck that dies in the kernel OOM killer
-never reaches u_calloc's own error path, so ccx tells you nothing about what
-it was trying to allocate.  CCX_ALLOC_TRACE=<MB> logs every allocation at or
-above that size -- variable, size, and the source line that asked for it --
-BEFORE it is attempted.  On the 0.0060 undrained mesh that turned a
-silent kill into a list, and the list had an obvious entry in it.
+A deck that dies in the kernel OOM killer never reaches u_calloc's error
+path, so ccx says nothing about what it was allocating.  CCX_ALLOC_TRACE=<MB>
+logs every allocation at or above that size, with the source line, before it
+is attempted (u_calloc.c, u_realloc.c).
 
-  u_calloc.c    CCX_ALLOC_TRACE=<MB>, on the way in
-  u_realloc.c   the same
-  readinput.c   the entry it found
+inpc holds the deck as text padded to 132 bytes a line: readinput.c grows it
+1.1x and then RENEWs to 132*nline, reserving the maximum line length for every
+line.  Every reader walks the ipoinpc offset table, so sizing to
+ipoinpc[*nline] holds the same deck in less space:
 
-inpc IS THE DECK, HELD AS TEXT, PADDED TO 132 BYTES A LINE.  readinput grows
-it 1.1x while reading, then finishes with
+    L_mesh 0.0060, 1.7 GB deck    after growth    after RENEW
+      before                      1.734 GB        3.110 GB
+      after                       1.734 GB        1.592 GB
 
-    RENEW(inpc,char,132**nline);
+VERIFIED answer-neutral on the acceptance deck (F_x = 1.552992E+07 in double,
+every digit).  The trace is off unless the variable is set.
 
-which reserves the maximum line length for every line whatever it actually
-holds.  On the 0.0060 deck that is 3.110 GB against ~1.7 GB of content.  It
-is not transient either: inpc is freed with ipoinp/inp at the very end of
-ccx_2.23.c, after the last step, so the slack is held through the whole
-factorisation.
 
-Every reader goes through the offset table -- getnewline.f walks
-ipoinpc(iline-1)+1 .. ipoinpc(iline), and the only fixed 132 strides in the
-tree are on textpart, a different array -- so ipoinpc[*nline] is exactly the
-number of characters stored, and sizing to it is the same deck in less space:
-
-    L_mesh 0.0060 undrained, 1.7 GB deck
-      before   grows to 1.734 GB, then RENEW UP to 3.110 GB
-      after    grows to 1.734 GB, then RENEW DOWN to 1.592 GB
-
-1.52 GB, on a run whose problem is that it does not fit.
-
-VERIFIED ANSWER-NEUTRAL on the 0.0240 acceptance deck: F_x = 1.552992E+07 in
-double, unchanged to every digit.
-
-The trace is off unless the variable is set, and costs one comparison per
-allocation when it is.  What it reported on 0.0060, for the record:
-
-  realloc inpc          1.592 GB   readinput.c:488
-  calloc  kon           0.768 GB   ccx_2.23.c:237
-  calloc  prestr        0.671 GB   ccx_2.23.c:440
-  calloc  sti           0.671 GB   ccx_2.23.c:722
-  calloc  eme           0.671 GB   ccx_2.23.c:726
-  realloc irow          1.511 GB   mastructdedup.c:241
-  calloc  xstiff        3.019 GB   linstatic.c:334
-  realloc au            6.043 GB   linstatic.c:475
-  calloc  au1           6.043 GB   mafillsmasmain.c:207
-  calloc  aupardiso     6.071 GB   pardiso.c:302
-
-No single allocation is pathological; the deck is simply large.  Note that
-prestr, sti and eme are sized over ALL elements, and on an F-bar deck most
-elements are U2/U3 smoothing domains that carry no stress at all -- that is
-~2 GB allocated for elements that never write to it, and is left alone here.
 --- readinput.c
 +++ readinput.c
 @@ -477,7 +477,15 @@

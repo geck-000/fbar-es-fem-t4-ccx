@@ -128,7 +128,7 @@ def main():
         # so a displaced boundary node is no longer ON the face and never gets
         # constrained -- which silently unrestrains the cell.  Distorting the
         # interior is what the test needs anyway.
-        qmin = float(os.environ.get('FBAR_BLOCK_QMIN', 0.15))
+        qmin = float(os.environ.get('FBAR_BLOCK_QMIN', '0.15'))
         rng = np.random.default_rng(11)
         tol0 = 1e-12
         inter = ~((nodes <= tol0) | (nodes >= 1.0 - tol0)).any(axis=1)
@@ -232,8 +232,8 @@ def main():
         open('%s_%s.inp' % (stem, tag), 'w').write('\n'.join(L) + '\n')
 
     k = kg if state == 'und' else KG_DRAINED
-    print('n=%-3d  %s  K/G=%-6g  bridge=%s load=%s/%s  nodes=%d tets=%d (soft %d, %.1f%%)  '
-          'elements through slab = %.0f'
+    print('n=%-3d  %s  K/G=%-6g  bridge=%s load=%s/%s  nodes=%d tets=%d '
+          '(soft %d, %.1f%%)  elements through slab = %.0f'
           % (n, state, k, bridge, load, confine, len(nodes), len(tets), len(soft),
              100.0 * len(soft) / len(tets), (hi - lo) * n))
     print('  E_soft=%.6e nu_soft=%.9f   eps=%.1e   ->  %s_{abq,ccx}.inp'

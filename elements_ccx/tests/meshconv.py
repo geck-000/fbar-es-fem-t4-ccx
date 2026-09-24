@@ -22,7 +22,7 @@ import argparse
 import os
 import subprocess
 import sys
-from typing import List, Optional
+from typing import List
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 FBARES = os.path.normpath(os.path.join(HERE, os.pardir, 'fbares.py'))
@@ -119,9 +119,8 @@ def main() -> int:
                                                         root))
         return 0
 
-    rc = subprocess.call(pmake('report_slabconv.py',
-                               [root, '%g' % a.kg, a.load] + ns), cwd=HERE)
-    return rc
+    return subprocess.call(pmake('report_slabconv.py',
+                                 [root, '%g' % a.kg, a.load] + ns), cwd=HERE)
 
 
 if __name__ == '__main__':

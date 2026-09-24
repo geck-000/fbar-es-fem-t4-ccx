@@ -1,65 +1,24 @@
+
 Report what PARDISO needs, and let it factor in single precision.
 
-TWO PROBLEMS, ONE CAUSE.  ccx fuses PARDISO's analysis and numerical
-factorisation into phase 12, so the only way to learn what a deck costs was
-to run the whole factorisation and watch it fail.  At L_mesh 0.0080 that
-meant seven hours of out-of-core thrashing -- 21.9 TB read against a 131 GB
-factor, the same factor re-read 166 times -- before the machine admitted it
-could not do it.  PARDISO knows after the ANALYSIS phase alone, in seconds.
+ccx fuses PARDISO's analysis and numerical factorisation into phase 12, so the
+only way to learn what a deck costs was to run the factorisation and watch it
+fail.  Splitting phase 12 into 11 then 22 and reading iparm(15)/(16)/(17)
+between them yields the peak, in seconds.
 
-  pardiso.c   CCX_PARDISO_MEMREPORT=1     report, then factor as usual
-              CCX_PARDISO_MEMREPORT=stop  report and stop, to size a machine
+    CCX_PARDISO_MEMREPORT=1     report, then factor as usual
+    CCX_PARDISO_MEMREPORT=stop  report and stop, to size a machine
+    CCX_PARDISO_SINGLE=1        iparm(28)=1, single-precision factor
 
-Phase 12 is split into 11 then 22, and iparm(15)/(16)/(17) are read between
-them: the symbolic peak, the part of it that stays allocated, and the
-numerical factorisation plus solve.  Peak is max(iparm(15), iparm(16)+
-iparm(17)), reported for the mtype actually in use -- which matters, because
-the out-of-core branch upgrades mtype 1 to 11.
+The single-precision path needs iparm(1)=1 first: the default discards
+iparm(28) and factors in double against a float array.  Measured on the
+acceptance deck: -39% peak memory, -37% time, reaction agrees to 1.3 ppm
+(1.552992E+07 vs 1.552994E+07).
 
-  L_mesh   equations   mtype           PEAK
-  0.0240      177 848  1  (in core)    5.12 GB
-  0.0240      177 848  11 (OOC)        5.37 GB
-  0.0080    1 691 831  1              136.37 GB
+Both switches are opt-in; the report is precision-blind if taken before
+iparm(1)=1 is in force.
 
-That last number is the whole story of the 0.0080 failure: a 24 GB core
-budget was asked to hold a 136 GB factor.  Memory grows about as neq^1.46
-across those two points, which puts L_mesh 0.0060 near 400 GB.
 
-SINGLE PRECISION.  CCX_PARDISO_SINGLE=1 sets iparm(28)=1 and halves the term
-that decides whether a deck fits.
-
-Setting iparm(28) alone does nothing, silently.  The default path leaves
-iparm(1)=0, "ignore iparm and use the defaults", so iparm(28) is discarded;
-PARDISO then factors in DOUBLE while being handed the float array, and
-segfaults.  Reaching iparm(28) needs iparm(1)=1, and pardisoinit is the only
-supported way to get a consistent set to modify -- the same requirement the
-out-of-core patch documents.  MKL also reads the VALUE arrays at the declared
-precision, so the matrix and the right-hand side are converted around the
-call; the matrix copy is a few GB against a factor of over a hundred.
-
-IT IS AN APPROXIMATION.  MKL PARDISO in single mode refines in single too, so
-accuracy caps near 1e-7 relative, and an F-bar ES-FEM system at nu ~ 0.4999
-is ill-conditioned enough that this is not obviously safe.  So it is measured,
-not assumed, against the acceptance deck's exact double-precision reaction:
-
-  L_mesh 0.0240, undrained, c=1     wall     peak RSS   F_x on RP-1
-  double                           68.46 s   6.26 GB    1.552992E+07
-  single                           43.35 s   3.83 GB    1.552994E+07
-
-39% less memory, 37% less time, and the reaction agrees to 1.3 ppm --
-E_x = 6.212 GPa either way.  On the 0.0080 deck the reported factor falls from
-136.37 GB to 72.33 GB, a clean 1.9x.
-
-The conversion is done IN PLACE.  A float is half a double, so writing
-fp[i] at offset 4i can never overwrite a double at offset 8i that has not
-been read yet; the array is then shrunk.  The obvious two-array version
-holds both at once, which on the 0.0060 cell is 6.07 GB of double beside
-3.04 GB of float -- a 3 GB peak paid for nothing.
-
-Both are OPT-IN and do nothing unless their variable is set.  Note that the
-memory REPORT is precision-blind if taken before iparm(1)=1 is in force:
-PARDISO sizes the factor symbolically, so a report that still says 136 GB
-under CCX_PARDISO_SINGLE means iparm(28) never took effect.
 --- pardiso.c
 +++ pardiso.c
 @@ -32,6 +32,26 @@

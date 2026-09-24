@@ -1,82 +1,15 @@
+
 Opt-in out-of-core PARDISO, for factors that do not fit in RAM.
 
-Patch 0011 removed the mastruct wall and the 0.0120 mesh at F-barES-FEM-T4
-c = 1 now builds its structure -- 600662 equations, 68.6M nonzeros -- and
-dies in the FACTORISATION instead.  Through the unsymmetric path, which
-stores both triangles, MKL PARDISO asked for ~44 GB of virtual memory and
-was killed at 27.2 GB anon-rss on a 30 GB machine.  Reducing threads does
-not help: 4 threads peaked HIGHER (27.2 GB) than 8 did before the global
-OOM killer took the earlier run (24.5 GB), so the factor itself is the term
-that matters, not the per-thread buffers.
+CCX_PARDISO_OOC=<MB> sets iparm[59]=2 and MKL_PARDISO_OOC_MAX_CORE_SIZE, so
+MKL spills the factor to disk in sequential blocks.  The same hook stops on a
+PARDISO error and reports the phase: an out-of-core run with a bad
+MKL_PARDISO_OOC_PATH earlier returned a modulus forty times too stiff with
+nothing in the log to say so.
 
-Nothing else on this machine can absorb it.  Swap is zram -- RAM-backed, so
-it adds no capacity -- and /tmp is tmpfs, so a 263 MB deck staged there is
-itself RAM.  What there is, is 812 GB of NVMe.
+VERIFIED: the bad path now exits 201 with the PARDISO error code and phase;
+the switch is opt-in and the in-core path is untouched.
 
-MKL PARDISO can spill the factor to disk: iparm(60)=2, in sequential blocks
-sized by MKL_PARDISO_OOC_MAX_CORE_SIZE, written to MKL_PARDISO_OOC_PATH
-(default ./ooc_temp, i.e. the deck directory -- so keep the deck on real
-disk).  ccx does not expose it.
-
-  pardiso.c   CCX_PARDISO_OOC=<MB> turns it on and sets the core budget.
-
-IT IS OPT-IN, AND THAT IS NOT TIMIDITY.  Reaching iparm(60) requires
-iparm(1)=1 -- "use the values in iparm" -- which means every other entry
-becomes a deliberate value instead of an MKL default, and pardisoinit is the
-only supported way to obtain a consistent set.  Stock runs never enter the
-branch, keep iparm(1)=0, and are bit-for-bit unaffected.
-
-VERIFIED ANSWER-NEUTRAL.  The acceptance decks at c = 1, in core and out of
-core with a 256 MB budget, agree exactly:
-
-  patch test, max|u - eps.X|/max|u|     3.165e-07   both
-  confined C1111 (exact 2.204400e+08)   2.204400e+08 both
-
-MTYPE 1 MUST BECOME 11 UNDER OUT-OF-CORE, OR THE FACTOR DIES.
-
-MKL PARDISO supports out-of-core ONLY for mtype = -2 and 11, not for
-mtype = 1 (structurally symmetric, numerically asymmetric).  The F-bar
-asymmetric path (linstatic.c sets symmetryflag=2, inputformat=1) lands on
-mtype = 1 in core and works there; with iparm(60)=2 the same matrix returns
-error -10 ("no license" / unsupported type) and the factor never starts.
-
-The inputformat=1 branch already composes the FULL general matrix (lower
-triangle + diagonal + upper triangle) into aupardiso/icolpardiso/pointers,
-so it is a genuine general matrix and may be factored as mtype = 11.  The
-switch is therefore made at the top of pardiso_factor, and mirrored in
-pardiso_solve and pardiso_cleanup so all three phases agree (a mismatched
-solve phase returns error -1).  In-core runs keep mtype = 1 and are
-unchanged.  The in-core budget must also be large enough: CCX_PARDISO_OOC
-= 4096 and 8192 return error -9 ("not enough memory") on the 0.0120 F-bar
-deck; 16384 works with a 22.6 GB peak RSS.
-
-AND CHECK THE RETURN CODE, WHICH ccx NEVER DID.
-
-pardiso.c hands &error to all three phases and reads it nowhere.  So ANY
-PARDISO failure -- out of memory, a zero pivot, an out-of-core scratch path
-that does not exist -- was silently ignored and ccx carried on with an
-unfactored system, returning a plausible-looking wrong answer.
-
-That is not hypothetical and it is how this was found.  An out-of-core run
-whose MKL_PARDISO_OOC_PATH pointed at a missing directory (the driver ran
-from the repo root, so ./ooc_temp was not where it thought) returned
-
-    E_und = 3.83e+11   against   5.52e+09 in core
-
-on the same deck and the same binary, a modulus forty times stiffer than
-the true one.  Nothing in the log said so.  The ONLY reason it was caught is
-that the traction-free transverse reaction read 1.85e-02 of the driven one
-instead of the 5e-14 every healthy run gives.
-
-pardiso_factor and pardiso_solve now stop with the error code and the phase.
-Verified: the same bad path now exits 201 with
-
-  *ERROR in pardiso_factor: PARDISO returned error -10 (phase 12, mtype 1).
-         The system was NOT solved.
-
-This check is worth more than the out-of-core switch it was added for: it
-guards every PARDISO run in the repository, and a silent wrong answer from a
-direct solver is the worst failure mode this repository has.
 
 --- pardiso.c
 +++ pardiso.c

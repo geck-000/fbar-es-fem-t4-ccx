@@ -253,7 +253,6 @@ def uniaxial(n: int, eps: float, ccx: str, inc: float, out: str) -> None:
     uflat = u.reshape(-1)
     f = nl.force(uflat)
     scale = max(np.abs(f).max(), 1e-30)
-    back = np.zeros((3 * len(nodes),))
     check = np.flatnonzero(~fmask)
     print('   stretch %.2f: max|u_x| %.4f  free residual/max|f| %.3e'
           % (eps, np.abs(u[:, 0]).max(),

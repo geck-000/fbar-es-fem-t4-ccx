@@ -10,19 +10,12 @@
 !         sbar = (E A^c D_div)_h   trial: the c-time cyclically smoothed J
 !         tbar = (E D_div)_h       test:  the UNSMOOTHED edge divergence
 !
-!     THIS MATRIX IS NOT SYMMETRIC, and that is the definition of F-bar, not an
-!     approximation.  Eq. (17) of the paper, verbatim:
-!
-!       "Note that the stretching tensor in this equation, D~, is not the
-!        deformation rate of F in Eq. (11) but that of F~ in Eq. (1) due to
-!        the adoption of the F-bar method."
-!
-!     so the stress comes from the modified gradient while the virtual work is
-!     paired with the unmodified one.  Assembling the Galerkin form
-!     sbar^T sbar instead is a different element; it happens to measure within
-!     0.02% of this one on C1111, but it is not what the paper specifies.  The
-!     element therefore requires the asymmetric assembly path (nasym=1,
-!     mafillsmas.f, PARDISO mtype=11).
+!     THIS MATRIX IS NOT SYMMETRIC, and that is the definition of F-bar, not
+!     an approximation: the stress comes from the modified gradient while the
+!     virtual work is paired with the unmodified one (eq. 17).  The Galerkin
+!     form sbar^T sbar is a different element, within 0.02% of this one on
+!     C1111.  The element therefore needs the asymmetric assembly path
+!     (nasym=1, mafillsmas.f, PARDISO mtype=11).
 !
 !         *USER ELEMENT,TYPE=U3,NODES=<stencil>,INTEGRATIONPOINTS=1,MAXDOF=3
 !
@@ -31,13 +24,8 @@
 !     u3vol does -- u3vol stops with a message naming the element if it finds
 !     a node the connectivity does not carry.
 !
-!     CAPACITY.  Measured on a production mesh (soft phase, 184572 edges):
-!         c = 1   mean 33.7 nodes  p99  78  max 173  ( 519 DOF)
-!         c = 2   mean 93.6 nodes  p99 259  max 494  (1482 DOF)
-!     c = 1 fits: patch 0008 already carries the element matrix at 765 DOF,
-!     the encoding limit (255 nodes), so nothing further has to be widened.
-!     c = 2 CANNOT be an element at all: userelements.f:83 rejects NODES > 255
-!     and mastruct.c reads the count from one character of the label.
+!     CAPACITY.  c = 1 reaches 173 nodes and fits the 255-node encoding
+!     limit; c = 2 reaches 494 and cannot be a user element at all.
 !
       subroutine e_c3d_u3(co,kon,lakonl,s,sm,ff,nelem,elcon,nelcon,
      &     ielmat,mi,ncmat_,ntmat_,ipkon,lakon,ne,stiffness,nasym,
@@ -96,7 +84,6 @@
       do i=1,nope
         konl(i)=kon(indexe+i)
       enddo
-!
 !
 !     Zero the ACTUAL extent, and zero sm too -- see e_c3d_u2 / patch 0008.
 !

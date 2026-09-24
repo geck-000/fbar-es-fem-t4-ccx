@@ -1,89 +1,31 @@
-Open the asymmetric assembly path to user elements, and stop truncating the
-node count at 127.
 
-U3 (F-barES-FEM-T4 volumetric, patch 0002) has a non-symmetric element
-matrix by construction.  Eq. (17) of Onishi, Iida & Amaya, verbatim:
+Open the asymmetric assembly path to user elements, and fix the signed char
+node count.
 
-  "Note that the stretching tensor in this equation, D~, is not the
-   deformation rate of F in Eq. (11) but that of F~ in Eq. (1) due to the
-   adoption of the F-bar method."
+U3 (patch 0002) has a non-symmetric matrix by construction: the F-bar pairing
+takes the stress from the modified gradient and pairs it with the virtual work
+of the unmodified one (K_vol = (K V_h) tbar^T sbar, tbar != sbar; the Galerkin
+form sbar^T sbar is a different element).  ccx already carries a complete
+asymmetric path for friction contact; three things kept U3 out of it.
 
-The stress comes from the modified gradient, the virtual work is paired with
-the unmodified one, and the result is K_vol = (K V_h) tbar^T sbar with
-tbar != sbar.  Assembling the Galerkin form sbar^T sbar instead measures
-within 0.02% on C1111 but is a different element.
+1. nasym was raised too late.  An element raising it inside e_c3d_u is
+   silently symmetrised by mafillsm and then double-counted by mafillsmas, so
+   linstatic.c and nonlingeo.c scan for "U3" and set nasym before
+   mafillsmmain, and mafillsm.f skips U3 when nasym is set.
+2. The asymmetric mechanical loop covered contact only (range ne0+1..ne,
+   empty without contact), so the whole volumetric half was missing from the
+   matrix while neq and the sparsity looked right.  mafillsmasmain.c
+   partitions 1..ne when a U3 is present; mafillsmas.f calls e_c3d_u3 into
+   allocatable wide arrays, sized to 765 only when the thread's range holds a
+   U3, so the fixed .bss does not grow.
+3. mastruct.c, mastructcs.c and arpackcs.c read the node count from a signed
+   char, so a >127-node element read negative and got no structure.  Fixed
+   with an (unsigned char) cast.
 
-ccx already has a complete asymmetric path -- elements raise nasym,
-mafillsmas assembles, pardiso.c selects mtype=11 -- built for friction
-contact.  Three things stopped U3 from reaching it.
+VERIFIED: patch test and confined compression, c = 0, 1, 2, match the C3D4
+control to the last printed digit; every U3 deck factors with the unsymmetric
+PARDISO; global force balance |sum RF|/max|RF| <= 7.1e-15.
 
-1. nasym WAS RAISED TOO LATE.
-
-Contact sets nasym in gencontelem_*, before the assembly.  An element that
-raises it inside e_c3d_u is already too late: mafillsm walks only the upper
-triangle of the element matrix (do ll=jj,...) into symmetric storage, so a
-U3 that reached it would be silently symmetrised, and mafillsmas would then
-add the full matrix on top of that -- wrong twice over.
-
-  linstatic.c    scan lakon for "U3" and set nasym before mafillsmmain
-  nonlingeo.c    the same, before its own mafillsmmain
-  mafillsm.f     skip U3 when nasym is set, exactly as it already skips
-                 friction springs ('ES...C')
-
-2. THE ASYMMETRIC MECHANICAL LOOP COVERED ONLY CONTACT ELEMENTS.
-
-Friction contact is stock ccx's only asymmetric mechanical contribution, and
-every contact element is generated past ne0, so mafillsmasmain partitions
-the mechanical range over ne0+1..ne -- and with no contact it sets
-nea = ne0+1 > neb = ne0, an EMPTY range.
-
-U3 lives among the ordinary elements.  With the stock bounds mafillsmas
-walked nothing, so the entire volumetric half of the element vanished from
-the matrix while neq and the sparsity stayed correct (mastruct builds those
-from the connectivity, not from the assembly).  The patch test came back
-with interior displacements 200x the applied field: a model held together by
-its deviatoric term alone.
-
-  mafillsmasmain.c  when the model contains a U3, partition the mechanical
-                    range over 1..ne, as the thermal range already is.  The
-                    loop cycles on anything that is neither 'ES' nor 'U3',
-                    so widening it is safe; models without U3 keep the
-                    stock contact partition and its load balance.
-  mafillsmas.f      a U3 branch calling e_c3d_u3 into wide su/smu/ffu, and
-                    sval selecting su or s in the one shared assembly block
-                    (the same arrangement patch 0006 used in mafillsm).
-                    su/smu are ALLOCATABLE and are only sized to 765 when
-                    the thread's range actually contains a U3: 765*765*8 =
-                    4.7 MB each as a fixed local would land in .bss and be
-                    shared across the assembly threads (patch 0007).
-                    Verified: .bss is still 0 in mafillsmas.o.
-
-3. THE NODE COUNT WAS READ AS A SIGNED CHAR.
-
-  mastruct.c, mastructcs.c, arpackcs.c:   nope = lakon[8*i+7];
-
-lakon is char*, char is SIGNED on x86-64, and the node count is one byte.
-A user element of more than 127 nodes was therefore read here as a NEGATIVE
-nope and got no matrix structure at all.  The Fortran side is unaffected
-(ichar returns 0..255), so the assembly went on to ask for entries mastruct
-had never created and add_sm_st_as stopped with 'coefficient should be 0'.
-
-Patch 0001 raised the element matrix to 765 DOF on the argument that 255
-nodes is what lakon(8:8) can encode and userelements.f allows.  That was
-right about the Fortran and wrong about the C: the real ceiling was 127.
-An F-barES-FEM-T4 c=2 stencil of 138 nodes hit it, on the first deck that
-used one.  Fixed with an (unsigned char) cast in all five places.
-
-VERIFICATION
-
-  * patch test and confined compression, c = 0, 1 and 2, agree with the
-    C3D4 control to the last printed digit (patch 0002 has the table).
-    c = 2 exercises a 414-DOF element and is the case that found defect 3.
-  * ccx reports 'Factoring the system of equations using the unsymmetric
-    pardiso solver' for every U3 deck, c = 0 included.
-  * global force balance |sum RF| / max|RF| <= 7.1e-15, so the internal
-    forces recovered by resultsmech_u3 match the matrix that mafillsmas
-    assembled -- the two enter through completely separate paths.
 
 --- mafillsmas.f
 +++ mafillsmas.f

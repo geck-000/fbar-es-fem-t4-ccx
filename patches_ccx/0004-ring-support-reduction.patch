@@ -1,93 +1,21 @@
+
 Ring x support: stop allocating the half of U3 that is identically zero.
 
-Patch 0010 reported that F-barES-FEM-T4 at c = 1 could not be built on the
-0.0120 mesh: mastruct.c pushes one entry per off-diagonal upper-
-triangle (dof,dof) pair of every element onto mast1 with NO deduplication,
-the index is a 32-bit ITG, and a U3 element dense over its 39-node stencil
-needed 5.16e9 insertions -- past 2^31, so ccx died in u_realloc with a
-negative allocation size.
+K_vol = (K V_h) tbar^T sbar is rank one with two different supports: tbar is
+the unsmoothed edge divergence, nonzero only on the U2 edge ring, while only
+sbar carries the wide E A^c support.  The (support - ring) x (support - ring)
+block that mastruct allocated is therefore identically zero.
 
-THE ELEMENT WAS NEVER DENSE OVER ITS STENCIL.
+fbares.py writes the U3 connectivity ring first and encodes nring in
+lakon(3:3); mastruct.c and mafillsmas.f stop the outer loop at nring, and
+e_c3d_u3 checks that tbar vanishes past it, naming the element and node
+otherwise.  tests/verify_element.py checks the ordering and the label in the
+deck.
 
-K_vol = (K V_h) tbar^T sbar is rank one and its two factors have DIFFERENT
-supports.  tbar is the UNSMOOTHED edge divergence of eq. (1) -- u3vol builds
-it only from the tets that contain the edge (the elcur list) -- so its
-support is exactly the U2 edge ring, 6.5 nodes on this cell.  Only sbar
-carries the wide E A^c support.  So s(ii,jj) can be nonzero only for i in
-the RING and j in the SUPPORT, and the
+VERIFIED: insertions fall ~3.3x at c = 1 (L_mesh 0.0240: 1.12e9 -> 3.4e8);
+the 0.0240 deck's E_x is bit-identical to the dense-structure run of patch
+0003; the patch test and confined compression are unchanged.
 
-    (support - ring) x (support - ring)
-
-block that mastruct was allocating is identically zero.  Dropping it is not
-an approximation and not a tolerance: those entries cannot be written.
-
-  fbares.py      writes the U3 connectivity RING FIRST -- [edge nodes, rest
-                 of ring, rest of support] -- and encodes nring in the type
-                 name as U3<r><xy>, r = LETTERS[nring-1].  elements.f keys
-                 the *USER ELEMENT lookup on label(2:5), so 'U' plus four
-                 characters is all ccx can carry and three suffix letters is
-                 the most that fits.  Ring sizes past 26 are refused with
-                 that reason named.
-  mastruct.c     decodes nring from lakon(3:3) and runs the insertion loop
-                 to ndof*nring instead of ndof*nope.  Restricting the OUTER
-                 loop alone is what makes this correct, and only because the
-                 ring is first: the inner loop starts at jj, so every
-                 unordered pair {ring, support} is still generated once.
-  mafillsmas.f   the same decode, row loop to 3*nring.  The column loop
-                 still spans the whole support -- a ring row couples to
-                 every support column, and mastruct allocated exactly that.
-  e_c3d_u3.f     row loop to nring, plus the guard below.
-
-THE ORDERING IS NOT TAKEN ON TRUST.
-
-A deck whose ring is not first, or whose label disagrees with it, would have
-real tbar rows dropped SILENTLY -- and no patch test can see that, because a
-uniform field gives the missing rows nothing to carry.  Worse, a deck from
-the PREVIOUS generator is named U3<xy>, so lakon(3:3) decodes as nring = 1
-and mastruct and the element agree on the same wrong answer: no error, just
-a different element.
-
-e_c3d_u3 therefore checks that tbar vanishes past nring and stops with the
-element number, its nring, and the offending node.  Verified: an old deck
-through the new binary stops with
-
-  *ERROR in e_c3d_u3: element 3151
-         lakon(3:3) says the ring is the first 1 nodes, but tbar is
-         nonzero at position 2 node 7
-
-tests/verify_element.py checks the same thing in the deck, where the
-element can be named before a two-hour solve rather than after one.
-
-WHAT IT BUYS
-
-Insertions fall by a factor ~3.3 at c = 1:
-
-  mesh       c   before     after     outcome
-  0.0240     0   7.23e7     2.7e7     -
-  0.0240     1   1.12e9     3.4e8     30.05M -> ~ nnz falls with it
-  0.0120     1   5.16e9     1.5e9     BUILDS: 600662 eq, 68.6M nnz
-
-VERIFICATION -- NOTHING MOVED
-
-  * the 0.0240 mesh at c = 1: E_x = 6153500000.0, BIT-IDENTICAL
-    to the dense-structure run of patch 0003.  R is still 2.4448.
-  * patch test, general six-component strain on a distorted mesh, c = 0, 1, 2:
-    max|u - eps.X|/max|u| = 3.165e-07 for every arm, the same value the C3D4
-    control and the dense structure gave.
-  * confined compression, c = 0, 1, 2: C1111 = 2.204400e+08, exact.
-
-The entries dropped are zero, so any change in these numbers would have meant
-the ring ordering or the nring decode was wrong.  None moved.
-
-WHAT IT DOES NOT FIX
-
-The 0.0120 mesh at c = 1 now builds its structure and dies in the FACTORISATION
-instead: 600662 equations at 68.6M nonzeros through the unsymmetric PARDISO
-path asks for 45 GB of virtual memory and was OOM-killed twice at ~22-24 GB
-anon-rss on this 30 GB machine.  That is a different wall and this patch does
-not claim it.  Note the two kills were GLOBAL, not cgroup, and swap here is
-zram (RAM-backed), so it cannot help, while /tmp is tmpfs so a 263 MB deck
-staged there is itself RAM.
 
 --- mafillsmas.f
 +++ mafillsmas.f

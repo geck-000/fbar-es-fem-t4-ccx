@@ -307,7 +307,7 @@ def run_arms(out: str, n: int, layout: str, kg: float, arms: List[str],
             continue
         h, l2, h1, l2i, h1i = res
         print('  n=%-3d %-10s %-10s h %.4f  L2 %.4e  H1 %.4e  incl L2 %.4e'
-              % (n, arm, tag or mesh, h, l2, h1, l2i, h1i))
+              '  incl H1 %.4e' % (n, arm, tag or mesh, h, l2, h1, l2i, h1i))
         with open(csv_path, 'a') as handle:
             handle.write('%d,%s,%g,%s,%s,%.8e,%.8e,%.8e,%.8e,%.8e\n'
                          % (n, layout, kg, arm, tag or mesh, h, l2, h1, l2i,
@@ -370,7 +370,7 @@ def report(path: str) -> None:
     for (layout, kg, arm), rs in sorted(groups.items()):
         rs.sort()
         print('\n%s  K/G=%g  %s' % (layout, kg, arm))
-        for n, _, _, _, h, l2, h1, l2i, h1i in rs:
+        for n, _, _, _, h, l2, h1, _, _ in rs:
             print('  n=%-3d  h %.4f  L2 %.4e  H1 %.4e' % (n, h, l2, h1))
         if len(rs) >= 2:
             rate_l2 = rate(rs[-2][5], rs[-1][5], rs[-2][0], rs[-1][0])

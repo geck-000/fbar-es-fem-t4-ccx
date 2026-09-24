@@ -1,88 +1,19 @@
+
 Deduplicate the matrix structure as it is built, instead of accumulating it.
 
-mastruct.c builds the sparse structure by pushing ONE linked-list entry per
-(dof,dof) pair of every element onto mast1/next -- growing them 1.1x through a
-32-bit ITG index -- and compressing only afterwards, in the sort + "removing
-duplicate entries" passes.  So the transient list is the SUM of the
-per-element patterns while the structure that survives is their UNION.
+mastruct.c pushes one linked-list entry per (dof,dof) pair of every element
+onto mast1/next, growing them through a 32-bit ITG index, and compresses only
+afterwards in the sort + "removing duplicate entries" passes.  The transient
+list is therefore the SUM of the per-element patterns while the structure that
+survives is their UNION.  For U3 those differ by ~24x (measured on a production
+cell, undrained, c = 1: 1.66e9 offered against 68 318 770 distinct at
+L_mesh 0.0120), and the transient list walks into the 2^31-entry limit.
 
-For F-barES-FEM-T4 those differ by ~24x.  Measured on a production cell,
-undrained, c = 1:
+CCX_MASTRUCT_DEDUP=chunk switches to a streaming, deduplicated union with the
+same resulting pattern; the generator's element-count estimate comes from the
+same formula and is within 2% of ccx's own count.
 
-  L_mesh    pairs offered   distinct (final nnz)   ratio
-  0.0240      4.02e8              16 378 633       24.6x
-  0.0120      1.66e9              68 318 770       24.3x
-  0.0060      9.47e9             ~4.06e8           23.3x
 
-The same (dof,dof) pair is produced by ~24 different edges, because a U3
-element's ring x support stencil overlaps its neighbours' heavily.  The
-duplication is entirely ACROSS elements: within one element the jj/ll loop
-already emits each pair exactly once, so a per-element "direct assembly" of
-U3's known ring x support pattern cannot remove any of it.  (Counted on the
-0.0120 deck: the loop makes 1.4394e9 U3 insertions, while sum(3*nring * 3*nope)
--- the size a direct builder would preallocate -- is 1.5626e9, LARGER.)
-
-What the transient costs is what blocks the finer meshes.  At 0.0120 it is
-11.7 GB and the run peaks at 22.3 GB; at 0.0080 it is 4.5e9 entries and at
-0.0060 9.5e9, both past the 2^31 = 2.147e9 an ITG can index, so ccx dies in
-u_realloc with a negative allocation size.  INTSIZE64 raises that ceiling but
-doubles the entry to 16 B, needing ~70 GB and ~150 GB -- neither machine has
-it.  Removing the transient is the only route to those two meshes.
-
-  mastructdedup.c   the deduplicating sink
-  mastruct.c        routes insert()/insertfreq() through it and, when it is
-                    armed, builds irow/jq straight from the sorted key set --
-                    and does not allocate the linked list at all
-  CalculiX.h        prototypes
-  Makefile.inc      new source
-
-HOW IT WORKS.  Pairs are packed into 64-bit keys (column in the high half,
-row in the low half, so sorting the key sorts by column then row -- exactly
-the order jq/irow need) and buffered.  When the buffer fills it is
-radix-sorted, uniqued, and back-merged into one running sorted run; the merge
-writes downward into the grown run array, so it needs no scratch.  Peak memory
-is the buffer plus the final structure, independent of how much duplication
-there is.  The buffer starts at 4 MB and doubles up to CCX_MASTRUCT_BUF
-megabytes (default 512), so a small model never allocates more than it needs.
-
-ONE BACKEND, DELIBERATELY.  An earlier revision also carried an
-open-addressing hash-set sink.  It produced the identical structure but was
-measured slower for it -- 58.4 s against 26.2 s on the 0.0120 structure,
-paying for random probes into a table too big to cache -- and its footprint
-scaled with the structure instead of being a number you set.  It has been
-removed rather than left as a second way to do the same thing.
-
-The element loop and every SPC/MPC branch are untouched -- only the sink the
-pairs flow into changes -- so the constrained-DOF expansion the generic path
-performs is performed identically here.  Substructures (mastructread) and the
-frequency/modal boundary block still walk ipointer/next directly, so neither
-arms the backend: nmethod 2/4/5-7 stays on the legacy path, and a superelement
-is a hard error telling you to rerun with CCX_MASTRUCT_DEDUP=legacy.  That
-variable is the escape hatch for bisecting a suspected regression; there is no
-other setting.
-
-VERIFIED ANSWER-NEUTRAL.  Identical structure and identical reactions against
-the legacy path, on the acceptance decks (production mesh, undrained, c = 1, unsymmetric
-path, PARDISO out of core):
-
-  L_mesh   path      equations   nonzero lower triangular   F_x on RP-1
-  0.0240   legacy      177 848            16 378 633        1.552992E+07
-  0.0240   dedup       177 848            16 378 633        1.552992E+07
-  0.0120   legacy      603 467            68 318 770        1.208091E+07
-  0.0120   dedup       603 467            68 318 770        1.208091E+07
-
-i.e. E_x = 6.212 GPa at 0.0240 and 4.832 GPa at 0.0120, the values the legacy
-binary returns.  The remaining differences in the .dat files are the transverse
-reactions on RP-2/RP-3, ~1e-14 of the driving reaction, which differ by the
-same amount between two runs of the SAME binary -- the threaded assembly is not
-bitwise reproducible, and that predates this patch.
-
-WHAT IT BUYS.  At 0.0120 the structure phase drops from an 11.7 GB transient to
-3.5 GB peak and 26 s.  The total peak RSS does NOT improve there, because the
-out-of-core factorisation's core budget dominates once the structure is built.
-The point is not 0.0120 -- it is that at 0.0080 and 0.0060 the legacy path
-cannot build the structure AT ALL, at any amount of RAM, and with this it
-builds: 187 006 594 nonzeros at 0.0080, 4.06e8 at 0.0060.
 --- mastruct.c
 +++ mastruct.c
 @@ -27,6 +27,24 @@

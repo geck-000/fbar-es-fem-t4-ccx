@@ -53,7 +53,6 @@ import smoothing_proto as proto  # noqa: E402
 TWOPI2 = (2.0 * np.pi) ** 2
 LAP_COEFF = 8.0 * np.pi ** 2
 
-E_MATRIX, NU_MATRIX = 9.37e9, 0.33
 G_INCLUSION = 4.4e5
 
 Geom = Callable[[float, float, float, float, float], int]
@@ -124,16 +123,6 @@ def iso(kg: float, g: float = G_INCLUSION) -> Tuple[float, float]:
         The pair (K, G).
     """
     return kg * g, g
-
-
-def matrix_props() -> Tuple[float, float]:
-    """Isotropic moduli of the compliant matrix.
-
-    Returns:
-        The pair (K, G) of the matrix.
-    """
-    g = E_MATRIX / (2.0 * (1.0 + NU_MATRIX))
-    return E_MATRIX / (3.0 * (1.0 - 2.0 * NU_MATRIX)), g
 
 
 def boundary_mask(nodes: np.ndarray, tol: float = 1e-9) -> np.ndarray:

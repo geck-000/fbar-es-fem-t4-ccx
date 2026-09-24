@@ -22,10 +22,9 @@
 !
 !     U4 carries no stiffness (e_c3d_u4 zeroes its 12-DOF block) and so
 !     contributes no internal force.  fn is already zeroed by resultsini
-!     before the stress pass, so there is nothing to do here: the previous
-!     version wrote fn(i,nelem)=0 with nelem the ELEMENT index into fn's
-!     NODE-indexed second dimension, which overflows fn whenever the element
-!     count exceeds the node count and segfaults in the stress pass.
+!     before the stress pass, so there is nothing to do here.  Do not write
+!     fn(i,nelem): the second dimension of fn is indexed by NODE, so an
+!     element number there overruns whenever elements outnumber nodes.
 !
       implicit none
 !

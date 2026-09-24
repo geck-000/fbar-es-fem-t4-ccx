@@ -1,48 +1,33 @@
+
 Finite-strain consistent tangent (stage 2 of the NLGEOM port).
 
-Under NLGEOM the U3 element now returns the exact derivative of the
-u3nlforce internal force, u3nltan.f, instead of the small-strain operator:
+Under NLGEOM the U3 element returns the exact derivative of the finite-strain
+force, u3nltan.f, instead of the small-strain operator:
 
     du -> dF -> dF~ -> (dJ~, dJbar) -> dFbar -> dT -> dA -> df
 
-with the ring weights (E row) at both ends, the cyclic chain (S row)
-inside dJbar, the Hencky tangent taken in the eigenbasis of
-B = Fbar Fbar^T, and both terms of the current-volume factor J~ V_h.  Rows
-are the ring and columns the support -- exactly the ring x support
-structure the deck already encodes -- so mastruct, the structure and the
-generator are untouched.
+with the ring weights at both ends, the cyclic chain inside dJbar, the Hencky
+tangent in the eigenbasis of B = Fbar Fbar^T, and both terms of the
+current-volume factor.  Rows are the ring and columns the support, so the deck
+structure and the generator are untouched.  U2 is skipped under NLGEOM: the
+finite-strain force already carries the deviatoric half.
 
-U2 IS ALSO SKIPPED under NLGEOM.  The finite-strain force already carries
-the deviatoric half, so adding U2's small-strain deviatoric stiffness to
-its tangent would double-count it; the Newton matrix is the U3 tangent
-alone.
+VERIFIED: u3nltan matches FbarNL.tangent to 6e-15 at a finite field and the
+small-strain operator to 5e-15 at u = 0 (tests/verify_nltan.py, which compiles
+a per-edge driver); through CalculiX the corrections per increment are
+quadratic (1.3e-2 -> 9.5e-4 -> 1.9e-6 -> 2.2e-11) and the reactions match the
+prototype to 1.4e-7 (tests/verify_nlccx.py).
 
-VERIFIED.  u3nltan matches FbarNL.tangent (the prototype chain, itself
-verified against central differences) to 6e-15 at a finite displacement
-field and the small-strain operator to 5e-15 at u = 0
-(elements_ccx/tests/verify_nltan.py, which compiles a per-edge driver and
-assembles the global matrix).  Through CalculiX, a NLGEOM
-boundary-value problem now shows quadratic corrections per increment
-(1.3e-2 -> 9.5e-4 -> 1.9e-6 -> 2.2e-11 in the first one) and the reactions
-match FbarNL.force(u_ccx) to 1.4e-7 at eps = 1e-3 and 3.9e-7 at eps = 1e-2
-(elements_ccx/tests/verify_nlccx.py).
+KNOWN LIMIT: at larger strain a trial state can invert an element; the element
+returns a null block for that trial and ccx cuts the increment back, which
+reaches roughly 1-2% strain on the MMS cell with the default step control.  A
+line search or arc-length control on the ccx side is not part of this patch.
 
-KNOWN LIMIT.  ccx's full Newton step can still drive a trial state into an
-inverted element at larger strain; the element then returns a null block
-for that trial (rather than aborting, matching e_c3d's nonpositive-jacobian
-handling) and ccx cuts the increment back.  With the default step control
-the analysis reaches roughly 1-2 % strain on the MMS cell before the
-trial states start inverting; smaller *STATIC increments extend that.
-A Newton line search or arc-length control on the ccx side is the proper
-remedy and is not part of this patch.
+  Makefile.inc   builds u3nltan.f
+  e_c3d_u.f      passes iperturb/vold to the U3 dispatcher
+  mafillsmas.f   the same for the asymmetric assembly
+  mafillsm.f     skips U2 under NLGEOM
 
-  Makefile.inc       builds u3nltan.f
-  e_c3d_u.f          passes iperturb/vold to the U3 dispatcher
-  mafillsmas.f       the same for the asymmetric assembly
-  mafillsm.f         skips U2 under NLGEOM
-
-The element sources themselves (u3nltan.f, e_c3d_u3.f) live in
-../elements_ccx/ and are copied into src/ before building.
 
 --- e_c3d_u.f
 +++ e_c3d_u.f

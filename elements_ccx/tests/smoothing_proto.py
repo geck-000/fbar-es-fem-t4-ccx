@@ -100,7 +100,7 @@ def mesh_box(n, slab_lo, slab_hi, jitter=0.0, seed=7, geom=None):
         # Shrink the amplitude until no tet is inverted and the worst is still
         # a reasonable fraction of the mean.
         base = nodes.copy()
-        amp, qmin = 1.0, float(os.environ.get('FBAR_MESH_QMIN', 0.15))
+        amp, qmin = 1.0, float(os.environ.get('FBAR_MESH_QMIN', '0.15'))
         for _ in range(40):
             nodes = base + amp * d[inv]
             p4 = nodes[_tets_of(n)]
@@ -440,7 +440,7 @@ def assemble(scheme, nodes, tets, mat, g, vol, faces, patch, props,
                 Bd = sum((vol[e] / 6.0 / Vh[h]) * expand(B[e], tets[e], nl)
                          for e in els_h)
                 A.add(dofs_of(nl), Vh[h] * Bd.T @ dmat(K, G, 'dev') @ Bd)
-        for (a, m), els in patch.items():
+        for (_a, m), els in patch.items():
             nl = sorted(set(int(x) for e in els for x in tets[e]))
             Va = sum(vol[e] for e in els) / 4.0
             K, G = props[m]
@@ -451,7 +451,7 @@ def assemble(scheme, nodes, tets, mat, g, vol, faces, patch, props,
     # ---- node-smoothed parts ------------------------------------------
     if scheme in ('ns_vol', 'ns_full', 'fs_ns'):
         part = 'full' if scheme == 'ns_full' else 'vol'
-        for (a, m), els in patch.items():
+        for (_a, m), els in patch.items():
             nl = sorted(set(int(x) for e in els for x in tets[e]))
             Va = sum(vol[e] for e in els) / 4.0
             K, G = props[m]
@@ -834,11 +834,12 @@ class FbarNL:
             gsel = g[sel][ee]                        # (L,4,3)
             nodesel = tets[sel][ee]                  # (L,4)
             dof = (nodesel[:, :, None] * 3 + np.arange(3)).ravel()
-            part = dict(sel=sel, E=E, S=S, Vh=Vh, K=props[m][0],
-                        G=props[m][1], hh=hh, ee=ee, ww=ww, gsel=gsel,
-                        dof=dof, gel=g[sel], nodesel=nodesel,
-                        tetsel=tets[sel],
-                        ne=len(sel), nh=E.shape[0], L=len(hh))
+            part = {'sel': sel, 'E': E, 'S': S, 'Vh': Vh,
+                    'K': props[m][0], 'G': props[m][1], 'hh': hh,
+                    'ee': ee, 'ww': ww, 'gsel': gsel, 'dof': dof,
+                    'gel': g[sel], 'nodesel': nodesel,
+                    'tetsel': tets[sel], 'ne': len(sel),
+                    'nh': E.shape[0], 'L': len(hh)}
             self._prepare_tangent(part)
             self.parts.append(part)
 
@@ -929,9 +930,10 @@ class FbarNL:
         T = (K * trH)[:, None, None] * np.eye(3) \
             + 2.0 * G * (H - (trH / 3.0)[:, None, None] * np.eye(3))
         Finv = np.linalg.inv(Ftil)
-        return dict(Ftil=Ftil, Jtil=Jtil, Jbar=Jbar, Fbar=Fbar, V=V, w=w,
-                    T=T, Finv=Finv, A=Finv @ T, v=Jtil * Vh,
-                    alpha=alpha, beta=1.0 / (3.0 * Jbar))
+        return {'Ftil': Ftil, 'Jtil': Jtil, 'Jbar': Jbar, 'Fbar': Fbar,
+                'V': V, 'w': w, 'T': T, 'Finv': Finv, 'A': Finv @ T,
+                'v': Jtil * Vh, 'alpha': alpha,
+                'beta': 1.0 / (3.0 * Jbar)}
 
     def _hencky_blocks(self, cfg, p):
         """The 9x9 blocks of dT/dFbar, one per edge.
