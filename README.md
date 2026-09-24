@@ -29,8 +29,6 @@ fbar-es-fem-t4-ccx/
 └── patches_ccx/           12 patches for a stock CalculiX 2.23 tree
 ```
 
-`ARCHITECTURE.md` maps the components (and carries the Mermaid source).
-
 ## Dependencies
 
 Building the element needs a CalculiX 2.23 source tree with `gcc`, `gfortran`
