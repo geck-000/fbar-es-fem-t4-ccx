@@ -1,4 +1,4 @@
-"""Report slabconv.sh over finished output, without re-solving.
+"""Report meshconv.py over finished output, without re-solving.
 
     report_slabconv.py <root> <K/G> <load axis> <n>...
 

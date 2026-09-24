@@ -17,7 +17,11 @@ Layouts and arms:
     python3 elements_ccx/tests/mms_ccx.py --out out_mms --n 8 \
         --layout single --kg 5000 --arms c3d4 fbar1
 
-    elements_ccx/tests/mms_ccx.sh        # the full sweep
+    python3 elements_ccx/tests/mms_ccx.py --sweep
+
+--sweep runs n = 8 12 16 24 over K/G = 10 100 1000 5000 (single phase, plus
+fbar0 at 5000) and the same K/G list for the two-phase layout, then prints
+the rates and the K/G summary.
 """
 from __future__ import annotations
 
@@ -251,6 +255,146 @@ def run_arm(
     return (1.0 / n, l2, h1, l2i, h1i)
 
 
+CSV_HEADER = 'n,layout,kg,arm,h,l2,h1,l2_incl,h1_incl\n'
+
+
+def arm_spec(layout: str, arm: str
+             ) -> Tuple[Optional[int], Optional[List[str]]]:
+    """Return (cycles, elsets) for one arm name.
+
+    Args:
+        layout: 'single' or 'two'.
+        arm: Arm label.
+
+    Returns:
+        The cycle count and the element sets to convert.
+    """
+    return {
+        'c3d4': (None, None),
+        'fbar0': (0, ['BODY'] if layout == 'single' else ['INCLUSION']),
+        'fbar1': (1, ['BODY'] if layout == 'single' else ['INCLUSION']),
+        'fbar1_incl': (1, ['INCLUSION']),
+        'fbar1_all': (1, ['MATRIX', 'INCLUSION']),
+    }[arm]
+
+
+def run_arms(out: str, n: int, layout: str, kg: float, arms: List[str],
+             ccx: str, mesh: str = 'box', symmetric: bool = False) -> None:
+    """Run a list of arms on one mesh and append them to ``out/mms.csv``.
+
+    Args:
+        out: Output directory.
+        n: Elements per edge.
+        layout: 'single' or 'two'.
+        kg: Inclusion K/G.
+        arms: Arm labels.
+        ccx: CalculiX binary.
+        mesh: 'box' or 'delaunay'.
+        symmetric: Generate and run the Galerkin pairing.
+    """
+    tag = (mesh if mesh != 'box' else '') + ('_sym' if symmetric else '')
+    os.makedirs(out, exist_ok=True)
+    csv_path = os.path.join(out, 'mms.csv')
+    if not os.path.exists(csv_path):
+        with open(csv_path, 'w') as handle:
+            handle.write(CSV_HEADER)
+    for arm in arms:
+        cycles, elsets = arm_spec(layout, arm)
+        d = os.path.join(out, 'n%d_%s_kg%g_%s%s' % (n, layout, kg, arm, tag))
+        res = run_arm(d, n, layout, kg, arm, ccx, cycles, elsets,
+                      mesh=mesh, symmetric=symmetric)
+        if res is None:
+            continue
+        h, l2, h1, l2i, h1i = res
+        print('  n=%-3d %-10s %-10s h %.4f  L2 %.4e  H1 %.4e  incl L2 %.4e'
+              % (n, arm, tag or mesh, h, l2, h1, l2i, h1i))
+        with open(csv_path, 'a') as handle:
+            handle.write('%d,%s,%g,%s,%s,%.8e,%.8e,%.8e,%.8e,%.8e\n'
+                         % (n, layout, kg, arm, tag or mesh, h, l2, h1, l2i,
+                            h1i))
+
+
+def load_rows(path: str) -> List[Tuple[int, str, float, str, float, float,
+                                       float, float, float]]:
+    """Read the sweep CSV.
+
+    Args:
+        path: Path of mms.csv.
+
+    Returns:
+        The rows as tuples.
+    """
+    import csv
+    rows = []
+    with open(path) as handle:
+        for rec in csv.DictReader(handle):
+            rows.append((int(rec['n']), rec['layout'], float(rec['kg']),
+                         rec['arm'], float(rec['h']), float(rec['l2']),
+                         float(rec['h1']), float(rec['l2_incl']),
+                         float(rec['h1_incl'])))
+    return rows
+
+
+def rate(a: float, b: float, na: int, nb: int) -> float:
+    """Observed convergence rate between two meshes.
+
+    Args:
+        a: Error on the coarser mesh.
+        b: Error on the finer mesh.
+        na: Coarse mesh size.
+        nb: Fine mesh size.
+
+    Returns:
+        log(a/b) / log(nb/na), or nan when b is zero.
+    """
+    import math
+    return float('nan') if b <= 0 else math.log(a / b) / math.log(nb / na)
+
+
+def report(path: str) -> None:
+    """Print errors per mesh, last-pair rates and the K/G summary.
+
+    Args:
+        path: Path of mms.csv.
+    """
+    rows = load_rows(path)
+    groups: Dict[Tuple[str, float, str], list] = {}
+    for r in rows:
+        groups.setdefault((r[1], r[2], r[3]), []).append(r)
+    finest: Dict[str, int] = {}
+    for layout in ('single', 'two'):
+        ns = [r[0] for r in rows if r[1] == layout]
+        if ns:
+            finest[layout] = max(ns)
+
+    for (layout, kg, arm), rs in sorted(groups.items()):
+        rs.sort()
+        print('\n%s  K/G=%g  %s' % (layout, kg, arm))
+        for n, _, _, _, h, l2, h1, l2i, h1i in rs:
+            print('  n=%-3d  h %.4f  L2 %.4e  H1 %.4e' % (n, h, l2, h1))
+        if len(rs) >= 2:
+            rate_l2 = rate(rs[-2][5], rs[-1][5], rs[-2][0], rs[-1][0])
+            rate_h1 = rate(rs[-2][6], rs[-1][6], rs[-2][0], rs[-1][0])
+            print('  last-pair rates: L2 %.2f  H1 %.2f' % (rate_l2, rate_h1))
+
+    for layout in ('single', 'two'):
+        if layout not in finest:
+            continue
+        print('\nK/G summary at n=%d (%s phase)' % (finest[layout], layout))
+        print('  %-10s %-14s %10s %10s %10s'
+              % ('arm', 'K/G', 'L2', 'H1', 'incl H1'))
+        for kg in sorted({r[2] for r in rows if r[1] == layout}):
+            for arm in sorted({r[3] for r in rows
+                               if r[1] == layout and r[2] == kg}):
+                sel = [r for r in rows if r[1] == layout and r[2] == kg
+                       and r[3] == arm and r[0] == finest[layout]]
+                if not sel:
+                    continue
+                _, _, _, _, _, l2, h1, l2i, h1i = sel[0]
+                print('  %-10s %-14g %10.3e %10.3e %10.3e'
+                      % (arm, kg, l2, h1, h1i))
+
+
 def main() -> int:
     """Command-line entry point.
 
@@ -259,42 +403,46 @@ def main() -> int:
     """
     ap = argparse.ArgumentParser()
     ap.add_argument('--out', default='out_mms')
-    ap.add_argument('--n', type=int, required=True)
-    ap.add_argument('--layout', choices=['single', 'two'], required=True)
-    ap.add_argument('--kg', type=float, required=True)
-    ap.add_argument('--arms', nargs='+', required=True)
+    ap.add_argument('--sweep', action='store_true',
+                    help='run the default sweep and print the report')
+    ap.add_argument('--ns', type=int, nargs='+', default=None)
+    ap.add_argument('--kgs', type=float, nargs='+', default=None)
+    ap.add_argument('--two-kgs', type=float, nargs='+', default=None)
+    ap.add_argument('--n', type=int, default=None)
+    ap.add_argument('--layout', choices=['single', 'two'], default=None)
+    ap.add_argument('--kg', type=float, default=None)
+    ap.add_argument('--arms', nargs='+', default=None)
     ap.add_argument('--mesh', choices=['box', 'delaunay'], default='box')
     ap.add_argument('--symmetric', action='store_true',
                     help='Galerkin pairing via CCX_FBAR_SYM=1')
     ap.add_argument('--ccx', default=os.environ.get('CCX_MMS', 'ccx_fbar'))
     a = ap.parse_args()
+
+    if a.sweep:
+        ns = a.ns or [8, 12, 16, 24]
+        kgs = a.kgs or [10, 100, 1000, 5000]
+        two_kgs = a.two_kgs or [10, 100, 1000, 5000]
+        for n in ns:
+            for kg in kgs:
+                run_arms(a.out, n, 'single', kg, ['c3d4', 'fbar1'], a.ccx,
+                         mesh=a.mesh, symmetric=a.symmetric)
+            run_arms(a.out, n, 'single', 5000, ['fbar0'], a.ccx,
+                     mesh=a.mesh, symmetric=a.symmetric)
+            for kg in two_kgs:
+                run_arms(a.out, n, 'two', kg,
+                         ['c3d4', 'fbar1_incl', 'fbar1_all'], a.ccx,
+                         mesh=a.mesh, symmetric=a.symmetric)
+        report(os.path.join(a.out, 'mms.csv'))
+        return 0
+
     if a.mesh == 'delaunay' and a.layout == 'two':
         raise SystemExit('mms_ccx: the two-phase cube geometry needs the '
                          'structured mesh')
-    tag = (a.mesh if a.mesh != 'box' else '') + ('_sym' if a.symmetric else '')
-
-    arms = {
-        'c3d4': (None, None),
-        'fbar0': (0, ['BODY'] if a.layout == 'single' else ['INCLUSION']),
-        'fbar1': (1, ['BODY'] if a.layout == 'single' else ['INCLUSION']),
-        'fbar1_incl': (1, ['INCLUSION']),
-        'fbar1_all': (1, ['MATRIX', 'INCLUSION']),
-    }
-    for arm in a.arms:
-        cycles, elsets = arms[arm]
-        d = os.path.join(a.out, 'n%d_%s_kg%g_%s%s'
-                         % (a.n, a.layout, a.kg, arm, tag))
-        res = run_arm(d, a.n, a.layout, a.kg, arm, a.ccx, cycles, elsets,
-                      mesh=a.mesh, symmetric=a.symmetric)
-        if res is not None:
-            h, l2, h1, l2i, h1i = res
-            print('  n=%-3d %-10s %-10s h %.4f  L2 %.4e  H1 %.4e  incl L2 %.4e'
-                  % (a.n, arm, tag or a.mesh, h, l2, h1, l2i))
-            csv_path = os.path.join(a.out, 'mms.csv')
-            with open(csv_path, 'a') as handle:
-                handle.write('%d,%s,%g,%s,%s,%.8e,%.8e,%.8e,%.8e,%.8e\n'
-                             % (a.n, a.layout, a.kg, arm, tag or a.mesh, h,
-                                l2, h1, l2i, h1i))
+    missing = [k for k in ('n', 'layout', 'kg', 'arms') if getattr(a, k) is None]
+    if missing:
+        ap.error('missing arguments: ' + ', '.join('--' + m for m in missing))
+    run_arms(a.out, a.n, a.layout, a.kg, a.arms, a.ccx, mesh=a.mesh,
+             symmetric=a.symmetric)
     return 0
 
 

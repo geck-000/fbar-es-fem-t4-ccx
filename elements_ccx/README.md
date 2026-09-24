@@ -60,14 +60,14 @@ pairing rides the same asymmetric storage path (`nasym` is still raised by
 ```
 
 `fbares.py` writes the whole deck from a `C3D4` deck; see its docstring and
-`tests/slabconv.sh` for an end-to-end driver. No element in an F-bar deck
+`tests/meshconv.py` for an end-to-end driver. No element in an F-bar deck
 carries stress, because the smoothing domains have no shape function and `U4`
 is null, so read results from displacements and reactions.
 
 ## Verification
 
-`tests/verify_fbar.py` (operator checks V1-V4), `verify_fbar_nl.py`
-(finite-strain checks N1-N4), `verify_u3_chain.py` (the Fortran walk against
-`S = E A^c`) and `verify_fbares_deck.py` (the generator) check the element
-against closed-form answers; `smoothing_proto.py` is the Python prototype
-behind them.
+`tests/verify_element.py` checks the element against closed-form answers: the
+operators and patch test, the `u3vol.f` walk against `S = E A^c`, the
+finite-strain force and its consistent tangent, the spurious-mode census, and
+the deck generator. `tests/run_tests.py` runs it, plus the Fortran and
+CalculiX-side checks; `tests/README.md` lists the entry points.

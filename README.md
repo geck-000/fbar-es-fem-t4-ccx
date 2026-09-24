@@ -44,13 +44,16 @@ Copy the sources from `elements_ccx/` into the CalculiX `src/` directory, add
 them to `SCCXF`/`SCCXC` in `Makefile.inc`, apply the patches in `patches_ccx/`
 (see its README), and rebuild; patches `0001` to `0005` carry the element
 itself. Then `elements_ccx/fbares.py` rewrites a plain `C3D4` deck as
-F-barES-FEM-T4, with `elements_ccx/tests/slabconv.sh` as an end-to-end driver.
+F-barES-FEM-T4, with `elements_ccx/tests/meshconv.py` as the mesh-convergence
+driver.
 The `*USER ELEMENT` interface caps connectivity at 255 nodes, so `c = 1` is
 deliverable and `c >= 2` needs a direct global-assembly pass. Read results from
 displacements and reactions, since no element in an F-bar deck carries stress.
 
 ## Tests
 
-`elements_ccx/tests/README.md` lists the checks: the operator and finite-strain
-checks, the Fortran chain against `S = E A^c`, the deck generator, and the
-mesh-convergence cell against the Abaqus `C3D4H` tables.
+Run the checks with `python3 elements_ccx/tests/run_tests.py`; adding
+`--ccx <binary>` also runs the CalculiX-side checks. `elements_ccx/tests/README.md`
+lists what each script covers: the operator and finite-strain checks, the
+Fortran chain against `S = E A^c`, the deck generator, and the
+mesh-convergence cell.

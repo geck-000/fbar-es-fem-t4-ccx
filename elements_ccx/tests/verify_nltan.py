@@ -8,7 +8,7 @@ of the assembled matrix.  The check is twofold:
     `assemble('fbar_1')` -- the linear limit of the eq. (17) chain;
   * at a finite displacement field it must equal `FbarNL.tangent(u)`, the
     prototype operator chain verified against central differences in
-    `verify_tangent.py`.
+    `verify_element.py`.
 
 The driver and the element sources live in this repository; gfortran is
 the only external requirement.
