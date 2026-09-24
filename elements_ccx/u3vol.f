@@ -23,7 +23,6 @@
 !     It also returns the UNSMOOTHED edge row, tbar = (E D_div)_h, because
 !     eq. (17) pairs the stress with the stretching of Ftilde, not of Fbar:
 !     the volumetric operator is tbar^T (K V_h) sbar and is NOT symmetric.
-!     See sections 2f and 4 of the companion paper.
 !
 !     Eq. (10) of the paper states outright that the whole chain is a weighted
 !     mean of the RAW element J, which is what makes it this single linear

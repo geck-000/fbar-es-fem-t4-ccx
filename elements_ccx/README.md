@@ -20,8 +20,7 @@ not `tbar`, or the symmetric boundary coupling is lost.
 
 The formulation is displacement-based, with no pressure degree of freedom, and
 suppresses volumetric locking by combining ES-FEM with the F-bar dilatation
-treatment and a cyclic smoothing whose count `c` is the free parameter. The
-companion papers carry the formulation and its operator analysis.
+treatment and a cyclic smoothing whose count `c` is the free parameter.
 
 | File | Role |
 |---|---|
