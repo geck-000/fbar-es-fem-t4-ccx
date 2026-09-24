@@ -36,8 +36,7 @@ and `make`. The non-symmetric tangent is factored through PARDISO's
 general-matrix path (`mtype = 11`), so CalculiX must be built with its PARDISO
 solver (Intel MKL). The Python checks need Python 3 with numpy and scipy,
 `verify_nltan.py` compiles a driver with `gfortran`, and the shell drivers need
-`bash` and `git` (the patches apply with `git apply`). Abaqus is optional: only
-the `C3D4H` side of the mesh-convergence comparison uses it.
+`bash` and `git` (the patches apply with `git apply`).
 
 ## Build and run
 
