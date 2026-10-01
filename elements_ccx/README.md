@@ -1,7 +1,6 @@
 # The F-barES-FEM-T4 element (U2 + U3 + U4)
 
-Fortran sources added to `ccx` to give it the locking-free 4-node tetrahedron
-that Abaqus calls `C3D4H`. Three `*USER ELEMENT` types run over the underlying
+Fortran sources added to `ccx` to give it the locking-free 4-node tetrahedron. Three `*USER ELEMENT` types run over the underlying
 T4 connectivity:
 
 | Type | Nodes | Role |
